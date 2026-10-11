@@ -53,6 +53,19 @@ func TestGateBlocksUntilDailyMinimum(t *testing.T) {
 	}
 }
 
+func TestGateWaitsForStartDay(t *testing.T) {
+	at(t, wed)
+	s := fresh(t)
+	s.GateFrom = day(wed).AddDate(0, 0, 1)
+	if gateDecide(s, "x", "/tmp").Block {
+		t.Fatal("install day must not block")
+	}
+	at(t, wed.AddDate(0, 0, 1))
+	if !gateDecide(s, "x", "/tmp").Block {
+		t.Fatal("should block from the start day")
+	}
+}
+
 func TestWeekendNeedsThree(t *testing.T) {
 	sat := time.Date(2026, 10, 17, 18, 0, 0, 0, time.Local)
 	at(t, sat)
@@ -235,4 +248,31 @@ func TestStatePersists(t *testing.T) {
 	if err != nil || s2.Current == nil || s2.Current.ID != "lc:two-sum" {
 		t.Fatalf("round trip failed: %v %+v", err, s2.Current)
 	}
+}
+
+// EDGE_LIVE=1 go test -run Live hits the real LeetCode API.
+func TestLiveLeetCode(t *testing.T) {
+	if os.Getenv("EDGE_LIVE") == "" {
+		t.Skip("set EDGE_LIVE=1")
+	}
+	t.Setenv("EDGE_HOME", t.TempDir())
+	t.Setenv("EDGE_CACHE", os.Getenv("EDGE_LIVE_CACHE"))
+	s, _ := load()
+	s.Ratings["lc"] = 1692
+	probs, err := lcProblems()
+	if err != nil || len(probs) < 2000 {
+		t.Fatalf("lc problems: %d %v", len(probs), err)
+	}
+	task := &Task{}
+	s.History = []Task{{ID: "cf:1A", Kind: "new"}} // last was CF → weekday picks LC
+	at(t, wed)
+	if err := s.newTask(task, nil); err != nil || task.Source() != "lc" {
+		t.Fatalf("%v %+v", err, task)
+	}
+	t.Logf("picked %s (%d) focus %s tags %v", task.Title, task.Rating, task.Focus, task.Tags)
+	starter, err := lcStarter(strings.TrimPrefix(task.ID, "lc:"))
+	if err != nil || !strings.Contains(starter, "class Solution") {
+		t.Fatalf("starter: %v %q", err, starter)
+	}
+	t.Log(starter)
 }

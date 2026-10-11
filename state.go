@@ -51,10 +51,11 @@ type State struct {
 	Passes   []time.Time      `json:"passes"`
 	GateRuns int              `json:"gate_runs"`
 	GateLast time.Time        `json:"gate_last"`
-	GateOff  []time.Time      `json:"gate_off"` // times status found the hook missing
-	Offset   map[string]int   `json:"offset"`   // per-source difficulty offset, adapted from results
-	Ratings  map[string]int   `json:"ratings"`  // cf, lc
-	CFDone   map[string]int64 `json:"cf_done"`  // problem -> first accepted unix time
+	GateOff  []time.Time      `json:"gate_off"`  // times status found the hook missing
+	GateFrom time.Time        `json:"gate_from"` // enforcement starts here (install day is free)
+	Offset   map[string]int   `json:"offset"`    // per-source difficulty offset, adapted from results
+	Ratings  map[string]int   `json:"ratings"`   // cf, lc
+	CFDone   map[string]int64 `json:"cf_done"`   // problem -> first accepted unix time
 	CFTried  map[string]bool  `json:"cf_tried"`
 	LastSync time.Time        `json:"last_sync"`
 }

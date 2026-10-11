@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -67,10 +68,24 @@ func install() error {
 		perms["allow"] = append(allow, "Bash(edge:*)")
 	}
 	cfg["permissions"] = perms
-	out, _ := json.MarshalIndent(cfg, "", "  ")
-	if err := os.WriteFile(settingsPath(), append(out, '\n'), 0o644); err != nil {
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false) // keep <, >, & in existing settings as written
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(cfg); err != nil {
+		return err
+	}
+	if err := os.WriteFile(settingsPath(), out.Bytes(), 0o644); err != nil {
 		return err
 	}
 	fmt.Println("gate hook →", settingsPath(), "(backup: settings.json.pre-edge)")
-	return nil
+	s, err := load()
+	if err != nil {
+		return err
+	}
+	if s.GateFrom.IsZero() {
+		s.GateFrom = day(now()).AddDate(0, 0, 1)
+	}
+	fmt.Println("gate enforces from", s.GateFrom.Format("Mon 02 Jan"))
+	return s.save()
 }

@@ -121,7 +121,7 @@ func gateDecide(s *State, prompt, cwd string) verdict {
 		return verdict{Context: tutorContract(s)}
 	}
 	got, need := s.today()
-	if got >= need || s.passOn(now()) {
+	if got >= need || s.passOn(now()) || now().Before(s.GateFrom) {
 		return verdict{}
 	}
 	var b strings.Builder
