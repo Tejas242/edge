@@ -276,3 +276,60 @@ func TestLiveLeetCode(t *testing.T) {
 	}
 	t.Log(starter)
 }
+
+func TestGateToolHoldsWhileClosed(t *testing.T) {
+	at(t, wed)
+	s := fresh(t)
+	h, _ := os.UserHomeDir()
+	cp := filepath.Join(h, "CP", "codeforces")
+	gems := filepath.Join(h, "Gems", "kinvault")
+	cases := []struct {
+		tool  string
+		input map[string]any
+		cwd   string
+		deny  bool
+	}{
+		{"Read", map[string]any{"file_path": filepath.Join(gems, "main.go")}, cp, true},
+		{"Read", map[string]any{"file_path": filepath.Join(cp, "2257/C.cpp")}, cp, false},
+		{"Edit", map[string]any{"file_path": filepath.Join(h, ".claude/settings.json")}, cp, true},
+		{"Grep", map[string]any{"pattern": "x"}, gems, true},
+		{"Grep", map[string]any{"pattern": "x", "path": "../.."}, cp, true},
+		{"Bash", map[string]any{"command": "g++ -std=c++20 -O2 -I ~/CP/lib 2257/C.cpp -o 2257/C && ./2257/C < 2257/.testcases/C_in_0.txt"}, cp, false},
+		{"Bash", map[string]any{"command": "cd ~/Gems/kinvault && go test ./..."}, cp, true},
+		{"Bash", map[string]any{"command": "cat 2257/../../../Gems/kinvault/main.go"}, cp, true},
+		{"Bash", map[string]any{"command": "git --git-dir=/home/x/Gems/kinvault/.git log"}, cp, true},
+		{"Bash", map[string]any{"command": "cd; ls Gems"}, cp, true},
+		{"Bash", map[string]any{"command": "go test ./..."}, gems, true},
+		{"Bash", map[string]any{"command": "edge status"}, gems, false},
+		{"Bash", map[string]any{"command": "edge status; rm -rf ~/Gems"}, cp, true},
+		{"Bash", map[string]any{"command": "echo $SECRET_DIR/x"}, cp, true},
+		{"Bash", map[string]any{"command": "curl -s https://codeforces.com/api/user.info?handles=screenager"}, cp, false},
+		{"mcp__claude_ai_Vercel__create_deployment", map[string]any{}, cp, true},
+		{"WebFetch", map[string]any{"url": "https://cp-algorithms.com"}, cp, false},
+	}
+	for _, c := range cases {
+		if deny, _ := gateTool(s, c.tool, c.input, c.cwd); deny != c.deny {
+			t.Errorf("%s %v in %s: deny=%v want %v", c.tool, c.input, c.cwd, deny, c.deny)
+		}
+	}
+	solved(s, "cf:1A", "solo", wed.Add(-time.Hour), wed)
+	if deny, _ := gateTool(s, "Bash", map[string]any{"command": "cd ~/Gems/kinvault && go test ./..."}, cp); deny {
+		t.Error("quota met: everything opens")
+	}
+}
+
+func TestGatePromptPracticeOnlyWhileClosed(t *testing.T) {
+	at(t, wed)
+	s := fresh(t)
+	h, _ := os.UserHomeDir()
+	if v := gateDecide(s, "/edge-status and also refactor kinvault", filepath.Join(h, "Gems")); v.Block || !strings.Contains(v.Context, "GATE CLOSED") {
+		t.Fatalf("edge prompts pass but carry the practice-only contract: %+v", v)
+	}
+	if v := gateDecide(s, "help with kinvault", filepath.Join(h, "CP")); v.Block || !strings.Contains(v.Context, "GATE CLOSED") {
+		t.Fatalf("~/CP passes with the practice-only contract: %+v", v)
+	}
+	solved(s, "cf:1A", "solo", wed.Add(-time.Hour), wed)
+	if v := gateDecide(s, "help with kinvault", filepath.Join(h, "CP")); strings.Contains(v.Context, "GATE CLOSED") {
+		t.Fatal("open gate: no practice-only contract")
+	}
+}

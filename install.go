@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 //go:embed skills
@@ -51,17 +52,24 @@ func install() error {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return err
 	}
-	if !gateInstalled() {
-		hooks, _ := cfg["hooks"].(map[string]any)
-		if hooks == nil {
-			hooks = map[string]any{}
-		}
-		ups, _ := hooks["UserPromptSubmit"].([]any)
-		hooks["UserPromptSubmit"] = append(ups, map[string]any{
-			"hooks": []any{map[string]any{"type": "command", "command": exe + " gate", "timeout": 10}},
-		})
-		cfg["hooks"] = hooks
+	hooks, _ := cfg["hooks"].(map[string]any)
+	if hooks == nil {
+		hooks = map[string]any{}
 	}
+	addHook := func(event, matcher, command string) {
+		list, _ := hooks[event].([]any)
+		if strings.Contains(fmt.Sprint(list), command) {
+			return
+		}
+		entry := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": 10}}}
+		if matcher != "" {
+			entry["matcher"] = matcher
+		}
+		hooks[event] = append(list, entry)
+	}
+	addHook("UserPromptSubmit", "", exe+" gate")
+	addHook("PreToolUse", "*", exe+" gate-tool")
+	cfg["hooks"] = hooks
 	perms, _ := cfg["permissions"].(map[string]any)
 	if perms == nil {
 		perms = map[string]any{}

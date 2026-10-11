@@ -22,6 +22,9 @@ func main() {
 	case "gate":
 		gate() // must never fail closed on its own errors
 		return
+	case "gate-tool":
+		gateToolHook()
+		return
 	case "install":
 		check(install())
 		return
@@ -195,6 +198,23 @@ func gate() {
 	}
 }
 
+func gateToolHook() {
+	var in struct {
+		Tool  string         `json:"tool_name"`
+		Input map[string]any `json:"tool_input"`
+		Cwd   string         `json:"cwd"`
+	}
+	json.NewDecoder(os.Stdin).Decode(&in)
+	s, err := load() // read-only, no lock: this runs before every tool call
+	if err != nil {
+		return
+	}
+	if deny, reason := gateTool(s, in.Tool, in.Input, in.Cwd); deny {
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"hookSpecificOutput": map[string]any{
+			"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}})
+	}
+}
+
 func settingsPath() string {
 	h, _ := os.UserHomeDir()
 	return filepath.Join(h, ".claude", "settings.json")
@@ -202,5 +222,5 @@ func settingsPath() string {
 
 func gateInstalled() bool {
 	b, err := os.ReadFile(settingsPath())
-	return err == nil && strings.Contains(string(b), "edge gate")
+	return err == nil && strings.Contains(string(b), "edge gate\"") && strings.Contains(string(b), "edge gate-tool")
 }

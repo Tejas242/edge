@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -110,32 +111,124 @@ type verdict struct {
 	Context string // injected into Claude's context when allowed
 }
 
-// gateDecide is the whole lockout policy, kept pure so it can be tested.
+// closed: today's minimum isn't met and nothing excuses it.
+func (s *State) closed() bool {
+	got, need := s.today()
+	return got < need && !s.passOn(now()) && !now().Before(s.GateFrom)
+}
+
+func under(p, dir string) bool {
+	return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
+}
+
+// gateDecide is the prompt half of the lockout. While closed, only practice
+// gets through: prompts from ~/CP or edge's own skills, with a contract that
+// keeps Claude on practice. gateTool enforces the same thing on tool calls.
 func gateDecide(s *State, prompt, cwd string) verdict {
 	p := strings.TrimSpace(prompt)
-	inWork := cwd == workDir() || strings.HasPrefix(cwd, workDir()+string(filepath.Separator))
-	if strings.HasPrefix(p, "/edge") {
+	practice := under(cwd, workDir()) || strings.HasPrefix(p, "/edge")
+	if !s.closed() {
+		if under(cwd, workDir()) {
+			return verdict{Context: tutorContract(s)}
+		}
 		return verdict{}
 	}
-	if inWork {
-		return verdict{Context: tutorContract(s)}
+	if practice {
+		return verdict{Context: tutorContract(s) + " " + lockedContract}
 	}
 	got, need := s.today()
-	if got >= need || s.passOn(now()) || now().Before(s.GateFrom) {
-		return verdict{}
-	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "edge gate: today's learning isn't done (%d/%d).", got, need)
 	if t := s.Current; t != nil && t.Active() {
 		fmt.Fprintf(&b, "\nYou're on %s (%s), %s in.", t.Title, t.URL, since(t.Started))
 	} else if t != nil {
-		fmt.Fprintf(&b, "\nWaiting for you: %s (%s). Run `edge start` or click Start on the notification.", t.Title, t.URL)
+		fmt.Fprintf(&b, "\nWaiting for you: %s (%s). Click Start on the notification, or `edge start`.", t.Title, t.URL)
 	}
 	b.WriteString("\nTalk to Claude from ~/CP about it any time.")
 	if !s.passUsedThisWeek() {
 		b.WriteString("\nReal emergency? `edge pass` unlocks today (1 per week).")
 	}
 	return verdict{Block: true, Reason: b.String()}
+}
+
+const lockedContract = "GATE CLOSED: today's practice isn't done. Only help with competitive programming / DSA practice. " +
+	"Decline anything else (other projects, deploys, config) with one line: it unlocks after today's problem. " +
+	"Never offer to disable, edit or work around the edge gate or its hooks."
+
+var (
+	shellSplit = regexp.MustCompile(`[\s'"=;&|<>()` + "`" + `]+`)
+	bareCd     = regexp.MustCompile(`(^|[;&|(]\s*)(cd|pushd)\s*($|[;&|)])`)
+)
+
+// gateTool is the hard half: while closed, tools may only touch ~/CP.
+func gateTool(s *State, tool string, input map[string]any, cwd string) (deny bool, reason string) {
+	if !s.closed() {
+		return false, ""
+	}
+	h, _ := os.UserHomeDir()
+	no := func(what string) (bool, string) {
+		return true, "edge gate: " + what + " is locked until today's practice is done. " +
+			"Only ~/CP is open. Tell the user it unlocks after today's problem; never offer to disable or edit the gate."
+	}
+	resolve := func(p string) string {
+		p = strings.NewReplacer("${HOME}", h, "$HOME", h).Replace(p)
+		if strings.HasPrefix(p, "~") {
+			p = h + p[1:]
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(cwd, p)
+		}
+		return filepath.Clean(p)
+	}
+	switch tool {
+	case "Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Glob", "Grep", "LS":
+		p, _ := input["file_path"].(string)
+		if p == "" {
+			p, _ = input["notebook_path"].(string)
+		}
+		if p == "" {
+			p, _ = input["path"].(string)
+		}
+		if p == "" {
+			p = cwd
+		}
+		if !under(resolve(p), workDir()) {
+			return no("this file")
+		}
+	case "Bash":
+		cmd, _ := input["command"].(string)
+		c := strings.TrimSpace(cmd)
+		if c == "edge" || strings.HasPrefix(c, "edge ") && !strings.ContainsAny(c, ";&|`$()<>") {
+			return false, ""
+		}
+		if !under(cwd, workDir()) {
+			return no("the shell outside ~/CP")
+		}
+		if bareCd.MatchString(c) {
+			return no("this command")
+		}
+		for _, tok := range shellSplit.Split(cmd, -1) {
+			if !strings.ContainsAny(tok, "/~$") {
+				continue // plain words stay relative to ~/CP
+			}
+			if strings.HasPrefix(tok, "$") && !strings.HasPrefix(tok, "$HOME") && !strings.HasPrefix(tok, "${HOME}") {
+				return no("this command")
+			}
+			if strings.Contains(tok, "://") {
+				continue // URLs
+			}
+			r := resolve(tok)
+			if !under(r, workDir()) && !under(r, "/usr") && !under(r, "/tmp") && r != "/dev/null" {
+				return no("this command")
+			}
+		}
+	case "WebFetch", "WebSearch", "Skill", "Task", "Agent", "TodoWrite", "ToolSearch":
+	default:
+		if strings.HasPrefix(tool, "mcp__") {
+			return no("this tool")
+		}
+	}
+	return false, ""
 }
 
 // tutorContract keeps Claude from doing the work when asked directly in the
