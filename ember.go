@@ -2,16 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// Ember (the Noctalia bar plugin, screenager/ember) shows edge's status and
-// cards; its buttons call `edge action <key>`.
-const emberCore = "screenager/ember:core"
+// Ember (github.com/Tejas242/ember, the dynamic island) shows edge's status
+// and cards; its buttons call `edge action <key>`.
 
 type emberButton struct {
 	Key     string `json:"key"`
@@ -40,22 +39,22 @@ type emberStatus struct {
 	Pending   bool   `json:"pending,omitempty"`
 }
 
-// toEmber delivers one message; false means Ember isn't running.
+// toEmber delivers one message over Ember's socket; false means Ember isn't running.
 func toEmber(msg any) bool {
-	b, _ := json.Marshal(msg)
-	cmd := exec.Command("noctalia", "msg", "plugin", emberCore, "all", "edge", string(b))
-	done := make(chan error, 1)
-	if cmd.Start() != nil {
+	payload, _ := json.Marshal(msg)
+	line, _ := json.Marshal(map[string]any{"type": "edge", "payload": json.RawMessage(payload)})
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	c, err := net.DialTimeout("unix", filepath.Join(dir, "ember.sock"), 300*time.Millisecond)
+	if err != nil {
 		return false
 	}
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		return err == nil
-	case <-time.After(3 * time.Second):
-		cmd.Process.Kill()
-		return false
-	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(time.Second))
+	_, err = c.Write(append(line, '\n'))
+	return err == nil
 }
 
 func edgeStatus(s *State) emberStatus {
@@ -91,18 +90,4 @@ func emberCardFor(e event) emberCard {
 	}
 	c.Buttons = append(c.Buttons, lead...)
 	return c
-}
-
-// emberHook is the plugin's hook script, if Ember is installed locally.
-func emberHook() string {
-	h, _ := os.UserHomeDir()
-	for _, p := range []string{
-		filepath.Join(h, ".local", "share", "noctalia", "plugins", "ember", "hook"),
-		filepath.Join(h, ".local", "state", "noctalia", "plugins", "materialized", "community", "ember", "hook"),
-	} {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	return ""
 }

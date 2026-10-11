@@ -49,7 +49,7 @@ func install() error {
 	} else if err := os.WriteFile(settingsPath()+".pre-edge", raw, 0o644); err != nil {
 		return err
 	}
-	out, err := patchSettings(raw, exe, emberHook())
+	out, err := patchSettings(raw, exe)
 	if err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func installService(exe string) error {
 
 // patchSettings adds edge's hooks and permission to Claude Code's settings,
 // replacing any older edge entries and leaving everything else as written.
-func patchSettings(raw []byte, exe, ember string) ([]byte, error) {
+func patchSettings(raw []byte, exe string) ([]byte, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, err
@@ -152,16 +152,6 @@ func patchSettings(raw []byte, exe, ember string) ([]byte, error) {
 	}
 	add("UserPromptSubmit", "", hookCmd, 10, false) // gate
 	add("PreToolUse", "*", hookCmd, 10, false)      // gate on tools
-	if ember != "" {                                // Ember's own hooks: sessions, Allow/Deny, questions
-		em := func(ev string) string { return fmt.Sprintf("sh '%s' %s", ember, ev) }
-		add("PermissionRequest", "*", em("PermissionRequest"), 100, false)
-		add("PreToolUse", "AskUserQuestion", em("AskUserQuestion"), 100, false)
-		for _, ev := range []string{"SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"} {
-			add(ev, "", em(ev), 5, true)
-		}
-		add("PreToolUse", "*", em("PreToolUse"), 5, true)
-		add("PostToolUse", "*", em("PostToolUse"), 5, true)
-	}
 	cfg["hooks"] = hooks
 	perms, _ := cfg["permissions"].(map[string]any)
 	if perms == nil {
@@ -182,7 +172,7 @@ func patchSettings(raw []byte, exe, ember string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-var edgeCmd = regexp.MustCompile(`(^|/)edge (gate|gate-tool|hook)$|ember/hook'? [A-Za-z]+$`)
+var edgeCmd = regexp.MustCompile(`(^|/)edge (gate|gate-tool|hook)$`)
 
 // isEdgeHook reports whether a settings hook entry runs edge or Ember (any install path).
 func isEdgeHook(entry any) bool {

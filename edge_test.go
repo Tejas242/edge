@@ -343,12 +343,11 @@ func TestPatchSettingsOnRealCopy(t *testing.T) {
 		t.Skip("no settings")
 	}
 	exe := "/home/x/.local/bin/edge"
-	ember := "/home/x/.local/share/noctalia/plugins/ember/hook"
-	out, err := patchSettings(raw, exe, ember)
+	out, err := patchSettings(raw, exe)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _ := patchSettings(out, exe, ember)
+	again, _ := patchSettings(out, exe)
 	if string(again) != string(out) {
 		t.Fatal("patch must be idempotent")
 	}
@@ -366,8 +365,5 @@ func TestPatchSettingsOnRealCopy(t *testing.T) {
 	s := string(out)
 	if strings.Contains(s, "edge gate") || strings.Count(s, exe+" hook") != 2 {
 		t.Fatalf("want 2 gate entries and no old gate entries:\n%s", s)
-	}
-	if strings.Count(s, ember) != 9 || !strings.Contains(s, `"async": true`) || !strings.Contains(s, "AskUserQuestion") {
-		t.Fatalf("want 9 Ember entries incl. async reporting and AskUserQuestion:\n%s", s)
 	}
 }
