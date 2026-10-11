@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -331,5 +333,40 @@ func TestGatePromptPracticeOnlyWhileClosed(t *testing.T) {
 	solved(s, "cf:1A", "solo", wed.Add(-time.Hour), wed)
 	if v := gateDecide(s, "help with kinvault", filepath.Join(h, "CP")); strings.Contains(v.Context, "GATE CLOSED") {
 		t.Fatal("open gate: no practice-only contract")
+	}
+}
+
+func TestPatchSettingsOnRealCopy(t *testing.T) {
+	h, _ := os.UserHomeDir()
+	raw, err := os.ReadFile(filepath.Join(h, ".claude", "settings.json"))
+	if err != nil {
+		t.Skip("no settings")
+	}
+	exe := "/home/x/.local/bin/edge"
+	out, err := patchSettings(raw, exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, _ := patchSettings(out, exe)
+	if string(again) != string(out) {
+		t.Fatal("patch must be idempotent")
+	}
+	var before, after map[string]any
+	json.Unmarshal(raw, &before)
+	json.Unmarshal(out, &after)
+	for k, v := range before {
+		if k == "hooks" || k == "permissions" {
+			continue
+		}
+		if fmt.Sprint(after[k]) != fmt.Sprint(v) {
+			t.Errorf("changed unrelated key %s", k)
+		}
+	}
+	s := string(out)
+	if strings.Contains(s, "edge gate") || strings.Count(s, exe+" hook") != 8 {
+		t.Fatalf("want 8 hook entries and no old gate entries:\n%s", s)
+	}
+	if !strings.Contains(s, `"async": true`) || !strings.Contains(s, `"PermissionRequest"`) {
+		t.Fatal("missing async reporting hooks or PermissionRequest")
 	}
 }

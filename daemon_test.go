@@ -138,3 +138,13 @@ func TestLateWarningOnlyWhenGated(t *testing.T) {
 		t.Fatal("should warn at 22:30 with work left")
 	}
 }
+
+func TestWireCardPutsPrimaryRight(t *testing.T) {
+	c := wireCard(event{Key: "offer:cf:1A", Title: "x", Actions: []action{{"start", "Start"}, {"snooze", "In 30 min"}, {"rest", "Done for today"}}})
+	if n := len(c.Buttons); n != 3 || c.Buttons[n-1].Key != "start" || !c.Buttons[n-1].Primary || c.Buttons[0].Primary {
+		t.Fatalf("%+v", c.Buttons)
+	}
+	if c.Mood != "work" || c.ID != "offer" {
+		t.Fatalf("%+v", c)
+	}
+}

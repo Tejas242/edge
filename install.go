@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -48,45 +49,11 @@ func install() error {
 	} else if err := os.WriteFile(settingsPath()+".pre-edge", raw, 0o644); err != nil {
 		return err
 	}
-	var cfg map[string]any
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	out, err := patchSettings(raw, exe)
+	if err != nil {
 		return err
 	}
-	hooks, _ := cfg["hooks"].(map[string]any)
-	if hooks == nil {
-		hooks = map[string]any{}
-	}
-	addHook := func(event, matcher, command string) {
-		list, _ := hooks[event].([]any)
-		if strings.Contains(fmt.Sprint(list), command) {
-			return
-		}
-		entry := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": 10}}}
-		if matcher != "" {
-			entry["matcher"] = matcher
-		}
-		hooks[event] = append(list, entry)
-	}
-	addHook("UserPromptSubmit", "", exe+" gate")
-	addHook("PreToolUse", "*", exe+" gate-tool")
-	cfg["hooks"] = hooks
-	perms, _ := cfg["permissions"].(map[string]any)
-	if perms == nil {
-		perms = map[string]any{}
-	}
-	allow, _ := perms["allow"].([]any)
-	if !slices.Contains(allow, any("Bash(edge:*)")) {
-		perms["allow"] = append(allow, "Bash(edge:*)")
-	}
-	cfg["permissions"] = perms
-	var out bytes.Buffer
-	enc := json.NewEncoder(&out)
-	enc.SetEscapeHTML(false) // keep <, >, & in existing settings as written
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(cfg); err != nil {
-		return err
-	}
-	if err := os.WriteFile(settingsPath(), out.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(settingsPath(), out, 0o644); err != nil {
 		return err
 	}
 	fmt.Println("gate hook →", settingsPath(), "(backup: settings.json.pre-edge)")
@@ -105,12 +72,12 @@ func install() error {
 }
 
 const unit = `[Unit]
-Description=edge: picks problems, watches submissions, speaks first
+Description=%s
 PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=%s daemon
+ExecStart=%s %s
 Restart=always
 RestartSec=10
 Environment=PATH=%%h/.local/bin:/usr/local/bin:/usr/bin
@@ -121,16 +88,103 @@ WantedBy=graphical-session.target
 
 func installService(exe string) error {
 	h, _ := os.UserHomeDir()
-	p := filepath.Join(h, ".config", "systemd", "user", "edge.service")
-	os.MkdirAll(filepath.Dir(p), 0o755)
-	if err := os.WriteFile(p, []byte(fmt.Sprintf(unit, exe)), 0o644); err != nil {
-		return err
+	dir := filepath.Join(h, ".config", "systemd", "user")
+	os.MkdirAll(dir, 0o755)
+	units := []struct{ name, desc, cmd string }{
+		{"edge.service", "edge: picks problems, watches submissions, speaks first", "daemon"},
+		{"edge-island.service", "edge island: Claude Code sessions and edge under the bar", "island"},
 	}
-	for _, args := range [][]string{{"daemon-reload"}, {"enable", "edge.service"}, {"restart", "edge.service"}} {
+	for _, u := range units {
+		if err := os.WriteFile(filepath.Join(dir, u.name), []byte(fmt.Sprintf(unit, u.desc, exe, u.cmd)), 0o644); err != nil {
+			return err
+		}
+	}
+	steps := [][]string{{"daemon-reload"}, {"enable", "edge.service", "edge-island.service"}, {"restart", "edge-island.service", "edge.service"}}
+	for _, args := range steps {
 		if out, err := exec.Command("systemctl", append([]string{"--user"}, args...)...).CombinedOutput(); err != nil {
 			return fmt.Errorf("systemctl %v: %v: %s", args, err, out)
 		}
 	}
-	fmt.Println("daemon →", p, "(running)")
+	fmt.Println("services → edge.service, edge-island.service (running)")
 	return nil
+}
+
+// patchSettings adds edge's hooks and permission to Claude Code's settings,
+// replacing any older edge entries and leaving everything else as written.
+func patchSettings(raw []byte, exe string) ([]byte, error) {
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, err
+	}
+	hooks, _ := cfg["hooks"].(map[string]any)
+	if hooks == nil {
+		hooks = map[string]any{}
+	}
+	hookCmd := exe + " hook"
+	// drop older edge entries (gate, gate-tool) and re-add one per event
+	for event, v := range hooks {
+		list, _ := v.([]any)
+		kept := list[:0]
+		for _, entry := range list {
+			if !isEdgeHook(entry) {
+				kept = append(kept, entry)
+			}
+		}
+		if len(kept) == 0 {
+			delete(hooks, event)
+		} else {
+			hooks[event] = kept
+		}
+	}
+	add := func(event, matcher string, timeout int, async bool) {
+		h := map[string]any{"type": "command", "command": hookCmd, "timeout": timeout}
+		if async {
+			h["async"] = true
+		}
+		entry := map[string]any{"hooks": []any{h}}
+		if matcher != "" {
+			entry["matcher"] = matcher
+		}
+		list, _ := hooks[event].([]any)
+		hooks[event] = append(list, entry)
+	}
+	add("UserPromptSubmit", "", 10, false)    // gate
+	add("PreToolUse", "*", 100, false)        // gate + questions on the island
+	add("PermissionRequest", "*", 100, false) // Allow / Deny / Always on the island
+	for _, ev := range []string{"PostToolUse", "Notification", "Stop", "SessionStart", "SessionEnd"} {
+		add(ev, map[string]string{"PostToolUse": "*"}[ev], 5, true) // just reporting: never block Claude
+	}
+	cfg["hooks"] = hooks
+	perms, _ := cfg["permissions"].(map[string]any)
+	if perms == nil {
+		perms = map[string]any{}
+	}
+	allow, _ := perms["allow"].([]any)
+	if !slices.Contains(allow, any("Bash(edge:*)")) {
+		perms["allow"] = append(allow, "Bash(edge:*)")
+	}
+	cfg["permissions"] = perms
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false) // keep <, >, & in existing settings as written
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(cfg); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+var edgeCmd = regexp.MustCompile(`(^|/)edge (gate|gate-tool|hook)$`)
+
+// isEdgeHook reports whether a settings hook entry runs edge (any install path).
+func isEdgeHook(entry any) bool {
+	m, _ := entry.(map[string]any)
+	hs, _ := m["hooks"].([]any)
+	for _, h := range hs {
+		hm, _ := h.(map[string]any)
+		if c, _ := hm["command"].(string); edgeCmd.MatchString(strings.TrimSpace(c)) {
+			return true
+		}
+	}
+	return false
 }
