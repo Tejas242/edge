@@ -4,12 +4,10 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-
-	"github.com/Tejas242/edge/island"
 )
 
-// hookCmd is the single entry point for every Claude Code hook: the gate
-// first, then the island (which answers permissions and questions).
+// hookCmd is edge's Claude Code hook: the gate. (Sessions, approvals and
+// questions are Ember's: the Noctalia plugin registers its own hook.)
 func hookCmd() {
 	raw, _ := io.ReadAll(os.Stdin)
 	var in struct {
@@ -34,33 +32,18 @@ func hookCmd() {
 		}
 		if v.Block {
 			out.Encode(map[string]any{"decision": "block", "reason": v.Reason})
-			return
-		}
-		island.Send(in.Event, raw)
-		if v.Context != "" {
+		} else if v.Context != "" {
 			out.Encode(map[string]any{"hookSpecificOutput": map[string]any{
 				"hookEventName": "UserPromptSubmit", "additionalContext": v.Context}})
 		}
 	case "PreToolUse":
-		if s, err := load(); err == nil {
-			if deny, reason := gateTool(s, in.Tool, in.Input, in.Cwd); deny {
-				out.Encode(map[string]any{"hookSpecificOutput": map[string]any{
-					"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}})
-				return
-			}
+		s, err := load()
+		if err != nil {
+			return
 		}
-		if in.Tool == "AskUserQuestion" {
-			if ans := island.Ask(in.Event, raw); ans != nil {
-				os.Stdout.Write(ans)
-			}
-			return // no answer: Claude asks in the terminal
+		if deny, reason := gateTool(s, in.Tool, in.Input, in.Cwd); deny {
+			out.Encode(map[string]any{"hookSpecificOutput": map[string]any{
+				"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}})
 		}
-		island.Send(in.Event, raw)
-	case "PermissionRequest":
-		if ans := island.Ask(in.Event, raw); ans != nil {
-			os.Stdout.Write(ans)
-		}
-	default:
-		island.Send(in.Event, raw)
 	}
 }

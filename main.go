@@ -11,8 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-
-	"github.com/Tejas242/edge/island"
 )
 
 func main() {
@@ -30,11 +28,11 @@ func main() {
 	case "hook":
 		hookCmd()
 		return
-	case "island":
-		if err := island.Run(); err != nil {
-			fmt.Fprintln(os.Stderr, "edge island:", err)
-			os.Exit(1)
+	case "action": // Ember's buttons
+		if len(args) != 1 {
+			usage()
 		}
+		onAction(args[0])
 		return
 	case "install":
 		check(install())
@@ -97,7 +95,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: edge daemon|island|hook|install|status|next|start|stuck|done|giveup|skip [--seen]|explain [0-2]|report|pass|sync|gate")
+	fmt.Fprintln(os.Stderr, "usage: edge daemon|hook|action <key>|install|status|next|start|stuck|done|giveup|skip [--seen]|explain [0-2]|report|pass|sync|gate")
 	os.Exit(2)
 }
 

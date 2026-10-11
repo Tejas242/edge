@@ -140,7 +140,7 @@ func TestLateWarningOnlyWhenGated(t *testing.T) {
 }
 
 func TestWireCardPutsPrimaryRight(t *testing.T) {
-	c := wireCard(event{Key: "offer:cf:1A", Title: "x", Actions: []action{{"start", "Start"}, {"snooze", "In 30 min"}, {"rest", "Done for today"}}})
+	c := emberCardFor(event{Key: "offer:cf:1A", Title: "x", Actions: []action{{"start", "Start"}, {"snooze", "In 30 min"}, {"rest", "Done for today"}}})
 	if n := len(c.Buttons); n != 3 || c.Buttons[n-1].Key != "start" || !c.Buttons[n-1].Primary || c.Buttons[0].Primary {
 		t.Fatalf("%+v", c.Buttons)
 	}

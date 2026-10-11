@@ -49,7 +49,7 @@ func install() error {
 	} else if err := os.WriteFile(settingsPath()+".pre-edge", raw, 0o644); err != nil {
 		return err
 	}
-	out, err := patchSettings(raw, exe)
+	out, err := patchSettings(raw, exe, emberHook())
 	if err != nil {
 		return err
 	}
@@ -92,26 +92,28 @@ func installService(exe string) error {
 	os.MkdirAll(dir, 0o755)
 	units := []struct{ name, desc, cmd string }{
 		{"edge.service", "edge: picks problems, watches submissions, speaks first", "daemon"},
-		{"edge-island.service", "edge island: Claude Code sessions and edge under the bar", "island"},
 	}
 	for _, u := range units {
 		if err := os.WriteFile(filepath.Join(dir, u.name), []byte(fmt.Sprintf(unit, u.desc, exe, u.cmd)), 0o644); err != nil {
 			return err
 		}
 	}
-	steps := [][]string{{"daemon-reload"}, {"enable", "edge.service", "edge-island.service"}, {"restart", "edge-island.service", "edge.service"}}
+	// the standalone island is now the Ember plugin
+	exec.Command("systemctl", "--user", "disable", "--now", "edge-island.service").Run()
+	os.Remove(filepath.Join(dir, "edge-island.service"))
+	steps := [][]string{{"daemon-reload"}, {"enable", "edge.service"}, {"restart", "edge.service"}}
 	for _, args := range steps {
 		if out, err := exec.Command("systemctl", append([]string{"--user"}, args...)...).CombinedOutput(); err != nil {
 			return fmt.Errorf("systemctl %v: %v: %s", args, err, out)
 		}
 	}
-	fmt.Println("services → edge.service, edge-island.service (running)")
+	fmt.Println("service → edge.service (running)")
 	return nil
 }
 
 // patchSettings adds edge's hooks and permission to Claude Code's settings,
 // replacing any older edge entries and leaving everything else as written.
-func patchSettings(raw []byte, exe string) ([]byte, error) {
+func patchSettings(raw []byte, exe, ember string) ([]byte, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, err
@@ -136,8 +138,8 @@ func patchSettings(raw []byte, exe string) ([]byte, error) {
 			hooks[event] = kept
 		}
 	}
-	add := func(event, matcher string, timeout int, async bool) {
-		h := map[string]any{"type": "command", "command": hookCmd, "timeout": timeout}
+	add := func(event, matcher, command string, timeout int, async bool) {
+		h := map[string]any{"type": "command", "command": command, "timeout": timeout}
 		if async {
 			h["async"] = true
 		}
@@ -148,11 +150,17 @@ func patchSettings(raw []byte, exe string) ([]byte, error) {
 		list, _ := hooks[event].([]any)
 		hooks[event] = append(list, entry)
 	}
-	add("UserPromptSubmit", "", 10, false)    // gate
-	add("PreToolUse", "*", 100, false)        // gate + questions on the island
-	add("PermissionRequest", "*", 100, false) // Allow / Deny / Always on the island
-	for _, ev := range []string{"PostToolUse", "Notification", "Stop", "SessionStart", "SessionEnd"} {
-		add(ev, map[string]string{"PostToolUse": "*"}[ev], 5, true) // just reporting: never block Claude
+	add("UserPromptSubmit", "", hookCmd, 10, false) // gate
+	add("PreToolUse", "*", hookCmd, 10, false)      // gate on tools
+	if ember != "" {                                // Ember's own hooks: sessions, Allow/Deny, questions
+		em := func(ev string) string { return fmt.Sprintf("sh '%s' %s", ember, ev) }
+		add("PermissionRequest", "*", em("PermissionRequest"), 100, false)
+		add("PreToolUse", "AskUserQuestion", em("AskUserQuestion"), 100, false)
+		for _, ev := range []string{"SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"} {
+			add(ev, "", em(ev), 5, true)
+		}
+		add("PreToolUse", "*", em("PreToolUse"), 5, true)
+		add("PostToolUse", "*", em("PostToolUse"), 5, true)
 	}
 	cfg["hooks"] = hooks
 	perms, _ := cfg["permissions"].(map[string]any)
@@ -174,9 +182,9 @@ func patchSettings(raw []byte, exe string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-var edgeCmd = regexp.MustCompile(`(^|/)edge (gate|gate-tool|hook)$`)
+var edgeCmd = regexp.MustCompile(`(^|/)edge (gate|gate-tool|hook)$|ember/hook'? [A-Za-z]+$`)
 
-// isEdgeHook reports whether a settings hook entry runs edge (any install path).
+// isEdgeHook reports whether a settings hook entry runs edge or Ember (any install path).
 func isEdgeHook(entry any) bool {
 	m, _ := entry.(map[string]any)
 	hs, _ := m["hooks"].([]any)

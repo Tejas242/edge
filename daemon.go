@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/Tejas242/edge/island"
 	"log"
 	"os"
 	"regexp"
@@ -336,22 +335,11 @@ func daemon() {
 	log.SetFlags(0)
 	log.Println("edge daemon up")
 	acts := make(chan string, 8)
-	var brain *island.Brain
-	var lastStatus island.EdgeStatus
+	var last emberStatus
+	var lastSent time.Time
 	for {
-		if brain == nil {
-			if b, err := island.DialBrain(); err == nil {
-				brain, lastStatus = b, island.EdgeStatus{}
-				log.Println("island connected")
-				go func(b *island.Brain) {
-					for k := range b.Actions {
-						acts <- k
-					}
-				}(b)
-			}
-		}
 		var evs []event
-		var st island.EdgeStatus
+		var st emberStatus
 		if err := update(func(s *State) error {
 			evs = step(s, focused())
 			st = edgeStatus(s)
@@ -359,18 +347,16 @@ func daemon() {
 		}); err != nil {
 			log.Println("tick:", err)
 		}
-		if brain != nil && st != lastStatus {
-			if brain.Status(st) != nil {
-				brain.Close()
-				brain = nil
-			} else {
-				lastStatus = st
+		// resend now and then too: Ember forgets everything when Noctalia restarts
+		if st != last || time.Since(lastSent) > time.Minute {
+			if toEmber(map[string]any{"type": "status", "status": st}) {
+				last, lastSent = st, time.Now()
 			}
 		}
 		for _, e := range evs {
 			log.Printf("say %s: %s", e.Key, e.Title)
-			if brain == nil || brain.Card(wireCard(e)) != nil {
-				notify(e, acts) // island down: desktop notification instead
+			if !toEmber(map[string]any{"type": "card", "card": emberCardFor(e)}) {
+				notify(e, acts) // Ember isn't running: desktop notification instead
 			}
 		}
 		select {
@@ -380,36 +366,4 @@ func daemon() {
 		case <-time.After(tickEvery):
 		}
 	}
-}
-
-func edgeStatus(s *State) island.EdgeStatus {
-	got, need := s.today()
-	st := island.EdgeStatus{Today: got, Need: need, Streak: s.streak(), Closed: s.closed()}
-	if t := s.Current; t != nil {
-		st.Task = strings.TrimPrefix(strings.TrimPrefix(t.ID, "cf:"), "lc:") + " · " + t.Title
-		if t.Source() == "lc" {
-			st.Task = t.Title
-		}
-		st.TaskURL, st.Started, st.Pending = t.URL, t.Started, !t.Active()
-	}
-	return st
-}
-
-// wireCard turns a brain event into an island card.
-func wireCard(e event) island.WireCard {
-	mood := map[string]string{"offer": "work", "hint": "nudge", "cold": "nudge", "giveup": "nudge", "drift": "nudge",
-		"late": "error", "ac": "happy", "fail": "error", "brief": "idle"}[e.slot()]
-	c := island.WireCard{ID: e.slot(), Mood: mood, Title: e.Title, Body: e.Body, Urgent: e.Urgent, Bounce: e.slot() == "ac"}
-	primary := map[string]bool{"start": true, "next": true, "hint": true, "teach": true, "explain": true}
-	var lead []island.Button
-	for _, a := range e.Actions {
-		b := island.Button{Key: a.Key, Label: a.Label, Primary: primary[a.Key]}
-		if b.Primary {
-			lead = append(lead, b)
-		} else {
-			c.Buttons = append(c.Buttons, b)
-		}
-	}
-	c.Buttons = append(c.Buttons, lead...) // primary on the right
-	return c
 }
