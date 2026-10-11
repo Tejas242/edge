@@ -42,7 +42,9 @@ func install() error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(settingsPath()+".pre-edge", raw, 0o644); err != nil {
+	if exists(settingsPath() + ".pre-edge") {
+		// keep the first, pre-edge backup
+	} else if err := os.WriteFile(settingsPath()+".pre-edge", raw, 0o644); err != nil {
 		return err
 	}
 	var cfg map[string]any
