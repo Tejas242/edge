@@ -131,8 +131,8 @@ func TestHintLadder(t *testing.T) {
 func TestProbeScheduling(t *testing.T) {
 	at(t, wed)
 	s := fresh(t)
-	finish(s, &Task{ID: "cf:1A", Kind: "new", Policy: "instant", Arm: "instant", Outcome: "assisted", Started: wed})
-	finish(s, &Task{ID: "cf:2A", Kind: "new", Policy: "ladder", Arm: "ladder", Outcome: "solo", Started: wed})
+	finish(s, &Task{ID: "cf:1A", Kind: "new", Policy: "instant", Arm: "instant", Outcome: "assisted", Started: wed}, wed)
+	finish(s, &Task{ID: "cf:2A", Kind: "new", Policy: "ladder", Arm: "ladder", Outcome: "solo", Started: wed}, wed)
 	if len(s.Probes) != 2 {
 		t.Fatalf("want 2 probes, got %d", len(s.Probes))
 	}
@@ -144,12 +144,12 @@ func TestProbeScheduling(t *testing.T) {
 	}
 	// Passing stage 1 schedules stage 2; failing repeats stage 1.
 	s.Probes = nil
-	finish(s, &Task{ID: "cf:1A", Kind: "resolve", Policy: "cold", Arm: "instant", ProbeStage: 1, Outcome: "solo", Started: wed})
+	finish(s, &Task{ID: "cf:1A", Kind: "resolve", Policy: "cold", Arm: "instant", ProbeStage: 1, Outcome: "solo", Started: wed}, wed)
 	if len(s.Probes) != 1 || s.Probes[0].Stage != 2 || s.Probes[0].Policy != "instant" {
 		t.Fatalf("stage 2 not scheduled: %+v", s.Probes)
 	}
 	s.Probes = nil
-	finish(s, &Task{ID: "cf:1A", Kind: "resolve", Policy: "cold", Arm: "instant", ProbeStage: 2, Outcome: "gaveup", Started: wed})
+	finish(s, &Task{ID: "cf:1A", Kind: "resolve", Policy: "cold", Arm: "instant", ProbeStage: 2, Outcome: "gaveup", Started: wed}, wed)
 	if len(s.Probes) != 1 || s.Probes[0].Stage != 2 {
 		t.Fatalf("failed probe should repeat its stage: %+v", s.Probes)
 	}

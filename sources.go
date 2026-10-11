@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const handle = "screenager" // same on Codeforces and LeetCode
+const user = "screenager" // same on Codeforces and LeetCode
 
 type Problem struct {
 	ID      string
@@ -119,12 +119,13 @@ func cfDecode(b []byte, out any) error {
 type cfSub struct {
 	Problem cfProblem `json:"problem"`
 	Verdict string    `json:"verdict"`
+	Passed  int       `json:"passedTestCount"`
 	Time    int64     `json:"creationTimeSeconds"`
 }
 
 func cfSubs(count int) ([]cfSub, error) {
 	var subs []cfSub
-	q := "user.status?handle=" + handle
+	q := "user.status?handle=" + user
 	if count > 0 {
 		q += "&from=1&count=" + strconv.Itoa(count)
 	}
@@ -135,7 +136,7 @@ func cfRating() (int, error) {
 	var u []struct {
 		Rating int `json:"rating"`
 	}
-	if err := cfAPI("user.info?handles="+handle, &u); err != nil || len(u) == 0 {
+	if err := cfAPI("user.info?handles="+user, &u); err != nil || len(u) == 0 {
 		return 0, err
 	}
 	return u[0].Rating, nil
@@ -201,7 +202,7 @@ func lcProfile() (rating int, recent []lcAC, err error) {
 		Recent []lcAC `json:"recentAcSubmissionList"`
 	}
 	err = lcQuery(`query($u:String!){userContestRanking(username:$u){rating}
-		recentAcSubmissionList(username:$u,limit:20){titleSlug timestamp}}`, map[string]any{"u": handle}, &r)
+		recentAcSubmissionList(username:$u,limit:20){titleSlug timestamp}}`, map[string]any{"u": user}, &r)
 	if r.Rank != nil {
 		rating = int(r.Rank.Rating)
 	}

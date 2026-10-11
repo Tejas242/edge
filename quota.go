@@ -126,12 +126,12 @@ func gateDecide(s *State, prompt, cwd string) verdict {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "edge gate: today's learning isn't done (%d/%d).", got, need)
-	if s.Current != nil {
-		fmt.Fprintf(&b, "\nYou're on: %s (%s), started %s ago.", s.Current.Title, s.Current.URL, since(s.Current.Started))
-	} else {
-		b.WriteString("\nRun /edge-next to get your task.")
+	if t := s.Current; t != nil && t.Active() {
+		fmt.Fprintf(&b, "\nYou're on %s (%s), %s in.", t.Title, t.URL, since(t.Started))
+	} else if t != nil {
+		fmt.Fprintf(&b, "\nWaiting for you: %s (%s). Run `edge start` or click Start on the notification.", t.Title, t.URL)
 	}
-	b.WriteString("\nWork in ~/CP. /edge-stuck for hints, /edge-done when accepted.")
+	b.WriteString("\nTalk to Claude from ~/CP about it any time.")
 	if !s.passUsedThisWeek() {
 		b.WriteString("\nReal emergency? `edge pass` unlocks today (1 per week).")
 	}
@@ -141,11 +141,16 @@ func gateDecide(s *State, prompt, cwd string) verdict {
 // tutorContract keeps Claude from doing the work when asked directly in the
 // learning workspace, outside /edge-stuck.
 func tutorContract(s *State) string {
-	c := "edge tutor mode: the user is practicing DSA in C++. Never write the solution or the key idea for their current problem. " +
-		"If they ask for help on it, tell them to run /edge-stuck, which gives hints at the level they have unlocked. " +
-		"Explaining general concepts, C++ syntax, STL or compiler errors is fine."
+	c := "edge tutor mode. The user practices DSA in C++ and never types edge commands: you run them. " +
+		"Never write the solution or reveal the key idea for their current problem except through the edge-stuck / edge-giveup skills. " +
+		"Map plain talk to skills: stuck/hint/help → edge-stuck; got AC/accepted/solved → edge-done; give up/show solution → edge-giveup; " +
+		"already solved this / different problem → edge-next (skip); progress/streak → edge-status. " +
+		"General concepts, C++ syntax, STL and compiler errors are fine to explain."
 	if t := s.Current; t != nil {
-		c += fmt.Sprintf(" Current problem: %s %s (policy %s, %d hints used).", t.Title, t.URL, t.Policy, t.Hints)
+		c += fmt.Sprintf(" Current problem: %s %s (policy %s, %d hints used, %d rejected).", t.Title, t.URL, t.Policy, t.Hints, t.Fails)
+	}
+	if t := s.lastSolved(); t != nil {
+		c += fmt.Sprintf(" %s was accepted and still needs its explain-back (edge-done).", t.Title)
 	}
 	return c
 }

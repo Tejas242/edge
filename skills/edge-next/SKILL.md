@@ -1,10 +1,12 @@
 ---
 name: edge-next
-description: Get the user's next learning task from edge (one problem, picked for their weak areas). Use when the user types /edge-next or asks what to practice next.
-allowed-tools: Bash(edge next), Bash(edge skip), Bash(edge skip --seen)
+description: Start or switch the user's edge problem. Use when the user asks for a problem or the next one, says they've already solved the current one, or wants a different one.
+allowed-tools: Bash(edge start), Bash(edge status), Bash(edge skip), Bash(edge skip --seen)
 ---
-Run `edge next` and show its output to the user plainly: the problem, link, solution file path and today's progress. Add nothing else.
+The edge daemon usually hands out problems itself, through desktop notifications. You're only needed when the user asks in chat.
 
-- Never mention the problem's topic, tags or likely technique. edge hides them on purpose.
-- If the user says they've already solved it on LeetCode, run `edge skip --seen`. If they want a different problem for another reason, run `edge skip`, but tell them that skipping earns no credit.
-- If it's a COLD RE-SOLVE or WARM-UP, remind them it's from scratch: no hints, and no peeking at their old file.
+- **Wants to start or continue:** run `edge start`. It opens the problem in the browser and nvim in alacritty. Tell them in one line which problem it is.
+- **Already solved it before:** run `edge skip --seen`, then `edge start`.
+- **Wants a different one for any other reason:** run `edge skip`, then `edge start`. Say that skipping earns no credit.
+
+Never mention the problem's topic, tags or likely technique; edge hides them on purpose. If it's a re-solve, say: from scratch, no hints.

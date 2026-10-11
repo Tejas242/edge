@@ -19,6 +19,9 @@ const ladderGiveup = 60 * time.Minute
 
 // hintAllowance says which hint level the task may get now, and when the next unlocks.
 func hintAllowance(t *Task) (level int, next time.Duration) {
+	if !t.Active() {
+		return 0, 0
+	}
 	switch t.Policy {
 	case "instant":
 		return 3, 0
@@ -35,6 +38,9 @@ func hintAllowance(t *Task) (level int, next time.Duration) {
 }
 
 func canGiveUp(t *Task) (bool, time.Duration) {
+	if !t.Active() {
+		return false, ladderGiveup
+	}
 	if t.Policy == "ladder" {
 		if el := now().Sub(t.Started); el < ladderGiveup {
 			return false, ladderGiveup - el

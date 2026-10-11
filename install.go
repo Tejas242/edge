@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 )
@@ -87,5 +88,39 @@ func install() error {
 		s.GateFrom = day(now()).AddDate(0, 0, 1)
 	}
 	fmt.Println("gate enforces from", s.GateFrom.Format("Mon 02 Jan"))
-	return s.save()
+	if err := s.save(); err != nil {
+		return err
+	}
+	return installService(exe)
+}
+
+const unit = `[Unit]
+Description=edge: picks problems, watches submissions, speaks first
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%s daemon
+Restart=always
+RestartSec=10
+Environment=PATH=%%h/.local/bin:/usr/local/bin:/usr/bin
+
+[Install]
+WantedBy=graphical-session.target
+`
+
+func installService(exe string) error {
+	h, _ := os.UserHomeDir()
+	p := filepath.Join(h, ".config", "systemd", "user", "edge.service")
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	if err := os.WriteFile(p, []byte(fmt.Sprintf(unit, exe)), 0o644); err != nil {
+		return err
+	}
+	for _, args := range [][]string{{"daemon-reload"}, {"enable", "edge.service"}, {"restart", "edge.service"}} {
+		if out, err := exec.Command("systemctl", append([]string{"--user"}, args...)...).CombinedOutput(); err != nil {
+			return fmt.Errorf("systemctl %v: %v: %s", args, err, out)
+		}
+	}
+	fmt.Println("daemon →", p, "(running)")
+	return nil
 }

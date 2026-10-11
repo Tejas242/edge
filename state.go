@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -21,16 +22,22 @@ type Task struct {
 	Focus      string    `json:"focus,omitempty"` // the weak tag this task was picked for
 	Policy     string    `json:"policy"`          // hint policy: ladder | instant | cold
 	Arm        string    `json:"arm"`             // experiment arm this result counts toward
-	Started    time.Time `json:"started"`
+	Assigned   time.Time `json:"assigned"`
+	Started    time.Time `json:"started"` // zero while assigned but not begun
 	Finished   time.Time `json:"finished,omitempty"`
 	Outcome    string    `json:"outcome,omitempty"` // solo | assisted | gaveup | skipped
 	Hints      int       `json:"hints"`
 	Explain    int       `json:"explain"` // explain-back score 0..2, -1 = not done
 	ProbeOf    string    `json:"probe_of,omitempty"`
 	ProbeStage int       `json:"probe_stage,omitempty"`
+	Fails      int       `json:"fails"`     // rejected submissions seen
+	DriftMin   int       `json:"drift_min"` // minutes on distractions while active
+	SubSeen    int64     `json:"sub_seen"`  // newest submission time already processed
 }
 
 func (t *Task) Source() string { return t.ID[:2] }
+
+func (t *Task) Active() bool { return !t.Started.IsZero() }
 
 // Probe is a scheduled cold re-solve of a problem already done once.
 type Probe struct {
@@ -44,20 +51,24 @@ type Probe struct {
 }
 
 type State struct {
-	Current  *Task            `json:"current,omitempty"`
-	History  []Task           `json:"history"`
-	Probes   []Probe          `json:"probes"`
-	Seen     map[string]bool  `json:"seen"` // problems known solved or skipped, never offered as new
-	Passes   []time.Time      `json:"passes"`
-	GateRuns int              `json:"gate_runs"`
-	GateLast time.Time        `json:"gate_last"`
-	GateOff  []time.Time      `json:"gate_off"`  // times status found the hook missing
-	GateFrom time.Time        `json:"gate_from"` // enforcement starts here (install day is free)
-	Offset   map[string]int   `json:"offset"`    // per-source difficulty offset, adapted from results
-	Ratings  map[string]int   `json:"ratings"`   // cf, lc
-	CFDone   map[string]int64 `json:"cf_done"`   // problem -> first accepted unix time
-	CFTried  map[string]bool  `json:"cf_tried"`
-	LastSync time.Time        `json:"last_sync"`
+	Current  *Task                `json:"current,omitempty"`
+	History  []Task               `json:"history"`
+	Probes   []Probe              `json:"probes"`
+	Seen     map[string]bool      `json:"seen"` // problems known solved or skipped, never offered as new
+	Passes   []time.Time          `json:"passes"`
+	GateRuns int                  `json:"gate_runs"`
+	GateLast time.Time            `json:"gate_last"`
+	GateOff  []time.Time          `json:"gate_off"`  // times status found the hook missing
+	GateFrom time.Time            `json:"gate_from"` // enforcement starts here (install day is free)
+	Offset   map[string]int       `json:"offset"`    // per-source difficulty offset, adapted from results
+	Ratings  map[string]int       `json:"ratings"`   // cf, lc
+	CFDone   map[string]int64     `json:"cf_done"`   // problem -> first accepted unix time
+	CFTried  map[string]bool      `json:"cf_tried"`
+	LastSync time.Time            `json:"last_sync"`
+	LastPoll time.Time            `json:"last_poll"`
+	Snooze   time.Time            `json:"snooze"`
+	Said     map[string]time.Time `json:"said"`     // notifications already sent, by key
+	DriftAt  time.Time            `json:"drift_at"` // when the current distraction started
 }
 
 func dataDir() string {
@@ -93,10 +104,38 @@ func load() (*State, error) {
 	if s.CFDone == nil {
 		s.CFDone = map[string]int64{}
 	}
+	if s.Said == nil {
+		s.Said = map[string]time.Time{}
+	}
 	if s.CFTried == nil {
 		s.CFTried = map[string]bool{}
 	}
 	return s, nil
+}
+
+// update runs f on the state under an exclusive lock: the daemon, the gate
+// hook and Claude's commands all write it.
+func update(f func(*State) error) error {
+	if err := os.MkdirAll(dataDir(), 0o755); err != nil {
+		return err
+	}
+	lf, err := os.OpenFile(filepath.Join(dataDir(), "state.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return err
+	}
+	defer lf.Close()
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+	s, err := load()
+	if err != nil {
+		return err
+	}
+	if err := f(s); err != nil {
+		return err
+	}
+	return s.save()
 }
 
 func (s *State) save() error {
