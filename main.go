@@ -54,6 +54,15 @@ func main() {
 		check(err)
 		fmt.Print(s.experimentReport())
 		return
+	case "stats":
+		s, err := load()
+		check(err)
+		enc := json.NewEncoder(os.Stdout)
+		if !slices.Contains(args, "--compact") {
+			enc.SetIndent("", " ")
+		}
+		check(enc.Encode(s.stats()))
+		return
 	case "config":
 		if len(args) == 1 && args[0] == "init" {
 			check(writeDefaultConfig())
@@ -174,7 +183,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: edge daemon|hook|action <key>|install|status|config [init]|next|start|stuck [--take N]|done|giveup|skip [--seen]|explain [0-2]|report|pass|sync")
+	fmt.Fprintln(os.Stderr, "usage: edge daemon|hook|action <key>|install|status|stats [--compact]|config [init]|next|start|stuck [--take N]|done|giveup|skip [--seen]|explain [0-2]|report|pass|sync")
 	os.Exit(2)
 }
 

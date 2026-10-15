@@ -228,19 +228,51 @@ type lcAC struct {
 	Time string `json:"timestamp"`
 }
 
-func lcProfile() (rating int, recent []lcAC, err error) {
+// lcProfile is the contest rating, its history and the last 20 accepts.
+func lcProfile() (rating int, history []RatingPoint, recent []lcAC, err error) {
 	var r struct {
 		Rank *struct {
 			Rating float64 `json:"rating"`
 		} `json:"userContestRanking"`
+		History []struct {
+			Attended bool    `json:"attended"`
+			Rating   float64 `json:"rating"`
+			Contest  struct {
+				Title     string `json:"title"`
+				StartTime int64  `json:"startTime"`
+			} `json:"contest"`
+		} `json:"userContestRankingHistory"`
 		Recent []lcAC `json:"recentAcSubmissionList"`
 	}
 	err = lcQuery(`query($u:String!){userContestRanking(username:$u){rating}
+		userContestRankingHistory(username:$u){attended rating contest{title startTime}}
 		recentAcSubmissionList(username:$u,limit:20){titleSlug timestamp}}`, map[string]any{"u": cfg().LCUser}, &r)
 	if r.Rank != nil {
 		rating = int(r.Rank.Rating)
 	}
-	return rating, r.Recent, err
+	for _, h := range r.History {
+		if h.Attended {
+			history = append(history, RatingPoint{At: time.Unix(h.Contest.StartTime, 0), Rating: int(h.Rating), Contest: h.Contest.Title})
+		}
+	}
+	return rating, history, r.Recent, err
+}
+
+// cfRatingHistory is every rated contest's result.
+func cfRatingHistory() ([]RatingPoint, error) {
+	var rs []struct {
+		Contest string `json:"contestName"`
+		Rating  int    `json:"newRating"`
+		At      int64  `json:"ratingUpdateTimeSeconds"`
+	}
+	if err := cfAPI("user.rating?handle="+cfg().CFUser, &rs); err != nil {
+		return nil, err
+	}
+	out := make([]RatingPoint, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, RatingPoint{At: time.Unix(r.At, 0), Rating: r.Rating, Contest: r.Contest})
+	}
+	return out, nil
 }
 
 // lcSub is one of the user's recent LeetCode submissions, any verdict.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -340,5 +341,88 @@ func TestWireCardPutsPrimaryRight(t *testing.T) {
 	}
 	if c.Mood != "work" || c.ID != "offer" {
 		t.Fatalf("%+v", c)
+	}
+}
+
+func TestStats(t *testing.T) {
+	at(t, wed)
+	s := fresh(t)
+	for d := 1; d <= 3; d++ { // Tue Mon met; Sun (needs 3) didn't
+		end := wed.AddDate(0, 0, -d)
+		solved(s, "cf:1A", "solo", end.Add(-time.Hour), end)
+		s.History[len(s.History)-1].Tags = []string{"dp"}
+	}
+	for d := 10; d <= 14; d++ { // an older 5-day run
+		end := wed.AddDate(0, 0, -d)
+		for i := 0; i < 3; i++ {
+			solved(s, "cf:2A", "assisted", end.Add(-time.Hour), end.Add(-time.Duration(i)*time.Minute))
+		}
+	}
+	s.Current = &Task{ID: "cf:9Z", Kind: "new", Title: "Secret", Rating: 1300, Tags: []string{"graphs"}, Focus: "graphs",
+		Policy: "ladder", Assigned: wed, Started: wed, WorkSec: 600}
+	s.CFDone["cf:5A"] = wed.Add(-time.Hour).Unix()
+	s.RatingLog["cf"] = []RatingPoint{{At: wed, Rating: 1208, Contest: "Round 1111"}}
+	st := s.stats()
+
+	if st.Version != 1 || len(st.Calendar) != 365 || st.Calendar[364].Date != "2026-10-14" || len(st.Week.Days) != 7 {
+		t.Fatalf("shape: v%d cal %d last %s week %d", st.Version, len(st.Calendar), st.Calendar[364].Date, len(st.Week.Days))
+	}
+	if st.Streak.Current != 2 || st.Streak.Best != 5 {
+		t.Fatalf("streak %+v", st.Streak)
+	}
+	if st.Calendar[364].CFSolved != 1 || st.Calendar[364].WorkSec != 600 {
+		t.Fatalf("today: %+v", st.Calendar[364])
+	}
+	if c := st.Current; c == nil || c.Tags != nil || c.Focus != "" || c.HintsAllowed != 0 || c.NextHintSec != 10*60 {
+		t.Fatalf("current task must not leak its topic: %+v", c)
+	}
+	if st.Totals.Solved != 18 || st.Totals.Solo != 3 || st.Totals.Days != 7 {
+		t.Fatalf("totals %+v", st.Totals)
+	}
+	var dp *StatsTopic
+	for i := range st.Topics {
+		if st.Topics[i].Tag == "dp" && st.Topics[i].Source == "cf" {
+			dp = &st.Topics[i]
+		}
+		if st.Topics[i].Tag == "graphs" && st.Topics[i].Tasks != 0 {
+			t.Fatal("the current task's topic leaked into topics")
+		}
+	}
+	if dp == nil || dp.Tasks != 3 || dp.Solo != 3 || dp.Weight != 3 {
+		t.Fatalf("dp topic %+v", dp)
+	}
+	if st.Today.Gate != "closed" || st.Sources["cf"].History[0].Rating != 1208 {
+		t.Fatalf("today %+v", st.Today)
+	}
+	b, _ := json.Marshal(st)
+	for _, k := range []string{`"recent":[`, `"health":[]`, `"upcoming":[]`, `"rating_history":[]`} {
+		if !strings.Contains(string(b), k) {
+			t.Errorf("lists are [] never null: missing %s", k)
+		}
+	}
+}
+
+func TestStatsWrittenOnlyOnChange(t *testing.T) {
+	at(t, wed)
+	s := fresh(t)
+	var w statsWriter
+	w.publish(s.stats())
+	p := statsPath()
+	st1, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	at(t, wed.Add(time.Second)) // only the timestamp moves
+	w.publish(s.stats())
+	if st2, _ := os.Stat(p); !st2.ModTime().Equal(st1.ModTime()) {
+		t.Fatal("rewrote stats.json with nothing new")
+	}
+	solved(s, "cf:1A", "solo", wed.Add(-time.Hour), wed)
+	w.publish(s.stats())
+	var got Stats
+	b, _ := os.ReadFile(p)
+	if json.Unmarshal(b, &got) != nil || got.Today.Got != 1 {
+		t.Fatalf("a real change is written: %s", b[:min(len(b), 200)])
 	}
 }

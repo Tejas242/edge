@@ -455,6 +455,7 @@ func daemon() {
 	acts := make(chan string, 8)
 	var last emberStatus
 	var lastSent, brokenSaid, lastTick time.Time
+	var sw statsWriter
 	for {
 		touch(daemonSeenPath())
 		snap, err := load()
@@ -474,6 +475,7 @@ func daemon() {
 		w := focused()
 		var evs []event
 		var st emberStatus
+		var stats *Stats
 		var dt time.Duration
 		if !lastTick.IsZero() {
 			dt = time.Since(lastTick)
@@ -482,9 +484,14 @@ func daemon() {
 		if err := update(func(s *State) error {
 			evs = step(s, w, g, dt)
 			st = edgeStatus(s)
+			x := s.stats()
+			stats = &x
 			return nil
 		}); err != nil {
 			log.Println("tick:", err)
+		}
+		if stats != nil {
+			sw.publish(*stats)
 		}
 		// resend now and then too: Ember forgets everything when Noctalia restarts
 		if st != last || time.Since(lastSent) > time.Minute {

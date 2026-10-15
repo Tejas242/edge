@@ -45,6 +45,7 @@ type syncData struct {
 	CFSubs   []cfSub
 	Full     bool
 	LCRecent []lcAC
+	History  []RatingPoint // contest rating history; nil = not fetched
 }
 
 func fetchSync(src string, full bool) syncData {
@@ -57,10 +58,13 @@ func fetchSync(src string, full bool) syncData {
 		if full {
 			n = 0
 		}
-		d.CFSubs, d.Err = cfSubs(n)
+		if d.CFSubs, d.Err = cfSubs(n); d.Err != nil {
+			return d
+		}
+		d.History, _ = cfRatingHistory() // a chart, not worth failing the sync for
 		return d
 	}
-	d.Rating, d.LCRecent, d.Err = lcProfile()
+	d.Rating, d.History, d.LCRecent, d.Err = lcProfile()
 	return d
 }
 
@@ -81,6 +85,9 @@ func (s *State) applySync(d syncData) {
 		l.Full = now()
 	}
 	s.setRating(d.Src, d.Rating)
+	if d.History != nil {
+		s.RatingLog[d.Src] = d.History
+	}
 	for _, x := range d.CFSubs {
 		k := x.Problem.key()
 		s.CFTried[k] = true

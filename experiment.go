@@ -51,8 +51,10 @@ func canGiveUp(t *Task) (bool, time.Duration) {
 }
 
 type armStats struct {
-	New, Solo    int
-	Probes, Pass int
+	New    int `json:"new"`
+	Solo   int `json:"solo"`
+	Probes int `json:"first_resolves"`
+	Pass   int `json:"retained"`
 }
 
 // arms tallies each arm. Retention counts one result per problem: its first

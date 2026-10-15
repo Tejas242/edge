@@ -67,6 +67,13 @@ type Probe struct {
 	Policy  string    `json:"policy"`        // arm of the original attempt, for the experiment
 }
 
+// RatingPoint is one rated contest.
+type RatingPoint struct {
+	At      time.Time `json:"at"`
+	Rating  int       `json:"rating"`
+	Contest string    `json:"contest"`
+}
+
 // syncLeg tracks one source's background sync, with backoff on failure.
 type syncLeg struct {
 	OK    time.Time `json:"ok"`    // last success
@@ -82,26 +89,27 @@ type Trouble struct {
 }
 
 type State struct {
-	Current   *Task                `json:"current,omitempty"`
-	History   []Task               `json:"history"`
-	Probes    []Probe              `json:"probes"`
-	Seen      map[string]bool      `json:"seen"` // problems known solved or skipped, never offered as new
-	Passes    []time.Time          `json:"passes"`
-	GateFrom  time.Time            `json:"gate_from"` // enforcement starts here (install day is free)
-	Pinned    *Rules               `json:"pinned,omitempty"`
-	Offset    map[string]int       `json:"offset"`     // per-source difficulty offset, adapted from results
-	AdaptFrom map[string]time.Time `json:"adapt_from"` // results before this already moved the band
-	Ratings   map[string]int       `json:"ratings"`    // cf, lc
-	CFDone    map[string]int64     `json:"cf_done"`    // problem -> first accepted unix time
-	CFTried   map[string]bool      `json:"cf_tried"`
-	Sync      map[string]*syncLeg  `json:"sync"`
-	LastPoll  time.Time            `json:"last_poll"`
-	Snooze    time.Time            `json:"snooze"`
-	LastAct   string               `json:"last_act,omitempty"` // last button, to drop double clicks
-	LastActAt time.Time            `json:"last_act_at,omitempty"`
-	Said      map[string]time.Time `json:"said"`     // notifications already sent, by key
-	DriftAt   time.Time            `json:"drift_at"` // when the current distraction started
-	Trouble   map[string]Trouble   `json:"trouble,omitempty"`
+	Current   *Task                    `json:"current,omitempty"`
+	History   []Task                   `json:"history"`
+	Probes    []Probe                  `json:"probes"`
+	Seen      map[string]bool          `json:"seen"` // problems known solved or skipped, never offered as new
+	Passes    []time.Time              `json:"passes"`
+	GateFrom  time.Time                `json:"gate_from"` // enforcement starts here (install day is free)
+	Pinned    *Rules                   `json:"pinned,omitempty"`
+	Offset    map[string]int           `json:"offset"`     // per-source difficulty offset, adapted from results
+	AdaptFrom map[string]time.Time     `json:"adapt_from"` // results before this already moved the band
+	Ratings   map[string]int           `json:"ratings"`    // cf, lc
+	RatingLog map[string][]RatingPoint `json:"rating_log"` // contest history per source, for charts
+	CFDone    map[string]int64         `json:"cf_done"`    // problem -> first accepted unix time
+	CFTried   map[string]bool          `json:"cf_tried"`
+	Sync      map[string]*syncLeg      `json:"sync"`
+	LastPoll  time.Time                `json:"last_poll"`
+	Snooze    time.Time                `json:"snooze"`
+	LastAct   string                   `json:"last_act,omitempty"` // last button, to drop double clicks
+	LastActAt time.Time                `json:"last_act_at,omitempty"`
+	Said      map[string]time.Time     `json:"said"`     // notifications already sent, by key
+	DriftAt   time.Time                `json:"drift_at"` // when the current distraction started
+	Trouble   map[string]Trouble       `json:"trouble,omitempty"`
 }
 
 // trouble records a problem, keeping the time it started.
@@ -179,6 +187,9 @@ func (s *State) init() {
 	}
 	if s.Sync == nil {
 		s.Sync = map[string]*syncLeg{}
+	}
+	if s.RatingLog == nil {
+		s.RatingLog = map[string][]RatingPoint{}
 	}
 	if s.AdaptFrom == nil {
 		s.AdaptFrom = map[string]time.Time{}
