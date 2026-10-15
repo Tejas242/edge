@@ -406,3 +406,40 @@ func TestContestOf(t *testing.T) {
 		t.Errorf("path %s", p)
 	}
 }
+
+func TestStateRecoversFromCorruptFile(t *testing.T) {
+	at(t, wed)
+	fresh(t)
+	if err := update(func(s *State) error { s.Ratings["cf"] = 1234; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	good, _ := os.ReadFile(statePath())
+	os.WriteFile(statePath()+".bak", good, 0o644)
+	os.WriteFile(statePath(), []byte(`{"history": [tru`), 0o644)
+	s, err := load()
+	if err != nil {
+		t.Fatal("a corrupt file must fall back to the backup:", err)
+	}
+	if s.Ratings["cf"] != 1234 || s.Trouble["state"] == "" {
+		t.Fatalf("restored %v, trouble %v", s.Ratings, s.Trouble)
+	}
+	if err := update(func(s *State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, raw, err := loadRaw(); err != nil || raw == nil {
+		t.Fatal("update must repair state.json")
+	}
+}
+
+func TestUpdateSkipsUnchangedWrites(t *testing.T) {
+	at(t, wed)
+	fresh(t)
+	update(func(s *State) error { s.Ratings["cf"] = 1; return nil })
+	st1, _ := os.Stat(statePath())
+	time.Sleep(10 * time.Millisecond)
+	update(func(s *State) error { return nil })
+	st2, _ := os.Stat(statePath())
+	if !st1.ModTime().Equal(st2.ModTime()) {
+		t.Fatal("a no-op update rewrote state.json")
+	}
+}

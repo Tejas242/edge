@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -67,8 +69,9 @@ type State struct {
 	LastSync time.Time            `json:"last_sync"`
 	LastPoll time.Time            `json:"last_poll"`
 	Snooze   time.Time            `json:"snooze"`
-	Said     map[string]time.Time `json:"said"`     // notifications already sent, by key
-	DriftAt  time.Time            `json:"drift_at"` // when the current distraction started
+	Said     map[string]time.Time `json:"said"`              // notifications already sent, by key
+	DriftAt  time.Time            `json:"drift_at"`          // when the current distraction started
+	Trouble  map[string]string    `json:"trouble,omitempty"` // what's broken right now, said once a day
 }
 
 func dataDir() string {
@@ -82,16 +85,37 @@ func dataDir() string {
 func statePath() string { return filepath.Join(dataDir(), "state.json") }
 
 func load() (*State, error) {
+	s, _, err := loadRaw()
+	return s, err
+}
+
+// loadRaw reads the state and the exact bytes it came from. A file that won't
+// parse falls back to the last good backup instead of switching edge off.
+func loadRaw() (*State, []byte, error) {
 	s := &State{}
 	b, err := os.ReadFile(statePath())
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
+		return nil, nil, err
 	}
 	if err == nil {
-		if err := json.Unmarshal(b, s); err != nil {
-			return nil, err
+		if perr := json.Unmarshal(b, s); perr != nil {
+			bak, berr := os.ReadFile(statePath() + ".bak")
+			s = &State{}
+			if berr != nil || json.Unmarshal(bak, s) != nil {
+				return nil, nil, fmt.Errorf("state.json is corrupt and there's no good backup: %w", perr)
+			}
+			b = nil // force a save, which repairs state.json
+			if s.Trouble == nil {
+				s.Trouble = map[string]string{}
+			}
+			s.Trouble["state"] = "state.json was corrupt; restored the backup from " + modTime(statePath()+".bak")
 		}
 	}
+	s.init()
+	return s, b, nil
+}
+
+func (s *State) init() {
 	if s.Seen == nil {
 		s.Seen = map[string]bool{}
 	}
@@ -110,11 +134,20 @@ func load() (*State, error) {
 	if s.CFTried == nil {
 		s.CFTried = map[string]bool{}
 	}
-	return s, nil
+	if s.Trouble == nil {
+		s.Trouble = map[string]string{}
+	}
 }
 
-// update runs f on the state under an exclusive lock: the daemon, the gate
-// hook and Claude's commands all write it.
+func modTime(p string) string {
+	if st, err := os.Stat(p); err == nil {
+		return st.ModTime().Format("Mon 15:04")
+	}
+	return "?"
+}
+
+// update runs f on the state under an exclusive lock: the daemon and Claude's
+// commands write it. Keep f free of network calls: the lock is shared.
 func update(f func(*State) error) error {
 	if err := os.MkdirAll(dataDir(), 0o755); err != nil {
 		return err
@@ -128,27 +161,71 @@ func update(f func(*State) error) error {
 		return err
 	}
 	defer syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
-	s, err := load()
+	s, raw, err := loadRaw()
 	if err != nil {
 		return err
 	}
 	if err := f(s); err != nil {
 		return err
 	}
-	return s.save()
+	b, err := s.encode()
+	if err != nil || bytes.Equal(b, raw) {
+		return err // nothing changed: no write
+	}
+	// keep a backup of the last good state, refreshed at most hourly
+	if bak := statePath() + ".bak"; raw != nil {
+		if st, err := os.Stat(bak); err != nil || now().Sub(st.ModTime()) > time.Hour {
+			writeAtomic(bak, raw, 0o644)
+		}
+	}
+	return writeAtomic(statePath(), b, 0o644)
+}
+
+func (s *State) encode() ([]byte, error) {
+	return json.MarshalIndent(s, "", " ")
 }
 
 func (s *State) save() error {
 	if err := os.MkdirAll(dataDir(), 0o755); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(s, "", " ")
+	b, err := s.encode()
 	if err != nil {
 		return err
 	}
-	tmp := statePath() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	return writeAtomic(statePath(), b, 0o644)
+}
+
+// writeAtomic replaces path with b: unique temp file, fsync, rename, fsync
+// the directory. A crash leaves either the old file or the new one.
+func writeAtomic(path string, b []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, statePath())
+	defer os.Remove(f.Name()) // no-op after the rename
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		return err
+	}
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
+	return nil
 }

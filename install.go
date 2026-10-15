@@ -24,6 +24,9 @@ func install() error {
 	if err != nil {
 		return err
 	}
+	if strings.Contains(exe, "go-build") || strings.HasPrefix(exe, os.TempDir()) {
+		return fmt.Errorf("%s is a temporary binary (go run?): build it to ~/.local/bin/edge and install from there", exe)
+	}
 	h, _ := os.UserHomeDir()
 	dst := filepath.Join(h, ".claude", "skills")
 	err = fs.WalkDir(skills, "skills", func(p string, d fs.DirEntry, err error) error {
@@ -53,19 +56,18 @@ func install() error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(settingsPath(), out, 0o644); err != nil {
+	if err := writeAtomic(settingsPath(), out, 0o644); err != nil {
 		return err
 	}
 	fmt.Println("gate hook →", settingsPath(), "(backup: settings.json.pre-edge)")
-	s, err := load()
+	err = update(func(s *State) error {
+		if s.GateFrom.IsZero() {
+			s.GateFrom = day(now()).AddDate(0, 0, 1)
+		}
+		fmt.Println("gate enforces from", s.GateFrom.Format("Mon 02 Jan"))
+		return nil
+	})
 	if err != nil {
-		return err
-	}
-	if s.GateFrom.IsZero() {
-		s.GateFrom = day(now()).AddDate(0, 0, 1)
-	}
-	fmt.Println("gate enforces from", s.GateFrom.Format("Mon 02 Jan"))
-	if err := s.save(); err != nil {
 		return err
 	}
 	return installService(exe)
