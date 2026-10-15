@@ -21,25 +21,39 @@ type Task struct {
 	URL        string    `json:"url"`
 	Rating     int       `json:"rating"`
 	Tags       []string  `json:"tags"`
-	Focus      string    `json:"focus,omitempty"` // the weak tag this task was picked for
-	Policy     string    `json:"policy"`          // hint policy: ladder | instant | cold
+	Focus      string    `json:"focus,omitempty"` // the tag this task was picked for; "" = any topic
+	Policy     string    `json:"policy"`          // hint policy: ladder | instant | cold ("" for new until started)
 	Arm        string    `json:"arm"`             // experiment arm this result counts toward
 	Assigned   time.Time `json:"assigned"`
 	Started    time.Time `json:"started"` // zero while assigned but not begun
 	Finished   time.Time `json:"finished,omitempty"`
-	Outcome    string    `json:"outcome,omitempty"` // solo | assisted | gaveup | skipped
+	Outcome    string    `json:"outcome,omitempty"` // solo | assisted | gaveup | skipped | ignored
+	Known      bool      `json:"known,omitempty"`   // solved too fast to be new: probably seen before
 	Hints      int       `json:"hints"`
 	Explain    int       `json:"explain"` // explain-back score 0..2, -1 = not done
 	ProbeOf    string    `json:"probe_of,omitempty"`
 	ProbeStage int       `json:"probe_stage,omitempty"`
-	Fails      int       `json:"fails"`     // rejected submissions seen
-	DriftMin   int       `json:"drift_min"` // minutes on distractions while active
-	SubSeen    int64     `json:"sub_seen"`  // newest submission time already processed
+	ProbeTry   int       `json:"probe_try,omitempty"` // 0 = first attempt at this stage
+	Fails      int       `json:"fails"`               // rejected submissions seen
+	WorkSec    int       `json:"work_sec"`            // seconds of real work seen (problem, editor or terminal in focus)
+	DriftSec   int       `json:"drift_sec"`           // seconds on distractions while active
+	Edited     bool      `json:"edited,omitempty"`    // the solution file changed after starting
+	Offers     int       `json:"offers,omitempty"`    // times offered without being started
+	SubSeen    int64     `json:"sub_seen"`            // newest submission time already processed
 }
 
-func (t *Task) Source() string { return t.ID[:2] }
+func (t *Task) Source() string {
+	if len(t.ID) < 2 {
+		return ""
+	}
+	return t.ID[:2]
+}
 
 func (t *Task) Active() bool { return !t.Started.IsZero() }
+
+// Worked is the real work time seen on the task, not wall-clock: suspend,
+// lunch or another app don't count.
+func (t *Task) Worked() time.Duration { return time.Duration(t.WorkSec) * time.Second }
 
 // Probe is a scheduled cold re-solve of a problem already done once.
 type Probe struct {
@@ -48,31 +62,59 @@ type Probe struct {
 	URL     string    `json:"url"`
 	Rating  int       `json:"rating"`
 	Due     time.Time `json:"due"`
-	Stage   int       `json:"stage"`  // 1 = +3d, 2 = +10d, 3 = +14d solo check
-	Policy  string    `json:"policy"` // arm of the original attempt, for the experiment
+	Stage   int       `json:"stage"`         // 1 = first re-solve, 2 = the later one
+	Try     int       `json:"try,omitempty"` // failed attempts at this stage so far
+	Policy  string    `json:"policy"`        // arm of the original attempt, for the experiment
+}
+
+// syncLeg tracks one source's background sync, with backoff on failure.
+type syncLeg struct {
+	OK    time.Time `json:"ok"`    // last success
+	Try   time.Time `json:"try"`   // last attempt
+	Full  time.Time `json:"full"`  // last full history fetch (CF)
+	Fails int       `json:"fails"` // failures in a row
+}
+
+// Trouble is something broken that the user should hear about.
+type Trouble struct {
+	Since time.Time `json:"since"`
+	Msg   string    `json:"msg"`
 }
 
 type State struct {
-	Current  *Task                `json:"current,omitempty"`
-	History  []Task               `json:"history"`
-	Probes   []Probe              `json:"probes"`
-	Seen     map[string]bool      `json:"seen"` // problems known solved or skipped, never offered as new
-	Passes   []time.Time          `json:"passes"`
-	GateRuns int                  `json:"gate_runs"`
-	GateLast time.Time            `json:"gate_last"`
-	GateOff  []time.Time          `json:"gate_off"`  // times status found the hook missing
-	GateFrom time.Time            `json:"gate_from"` // enforcement starts here (install day is free)
-	Offset   map[string]int       `json:"offset"`    // per-source difficulty offset, adapted from results
-	Ratings  map[string]int       `json:"ratings"`   // cf, lc
-	CFDone   map[string]int64     `json:"cf_done"`   // problem -> first accepted unix time
-	CFTried  map[string]bool      `json:"cf_tried"`
-	LastSync time.Time            `json:"last_sync"`
-	LastPoll time.Time            `json:"last_poll"`
-	Snooze   time.Time            `json:"snooze"`
-	Said     map[string]time.Time `json:"said"`              // notifications already sent, by key
-	DriftAt  time.Time            `json:"drift_at"`          // when the current distraction started
-	Trouble  map[string]string    `json:"trouble,omitempty"` // what's broken right now, said once a day
+	Current   *Task                `json:"current,omitempty"`
+	History   []Task               `json:"history"`
+	Probes    []Probe              `json:"probes"`
+	Seen      map[string]bool      `json:"seen"` // problems known solved or skipped, never offered as new
+	Passes    []time.Time          `json:"passes"`
+	GateFrom  time.Time            `json:"gate_from"` // enforcement starts here (install day is free)
+	Pinned    *Rules               `json:"pinned,omitempty"`
+	Offset    map[string]int       `json:"offset"`     // per-source difficulty offset, adapted from results
+	AdaptFrom map[string]time.Time `json:"adapt_from"` // results before this already moved the band
+	Ratings   map[string]int       `json:"ratings"`    // cf, lc
+	CFDone    map[string]int64     `json:"cf_done"`    // problem -> first accepted unix time
+	CFTried   map[string]bool      `json:"cf_tried"`
+	Sync      map[string]*syncLeg  `json:"sync"`
+	LastPoll  time.Time            `json:"last_poll"`
+	Snooze    time.Time            `json:"snooze"`
+	LastAct   string               `json:"last_act,omitempty"` // last button, to drop double clicks
+	LastActAt time.Time            `json:"last_act_at,omitempty"`
+	Said      map[string]time.Time `json:"said"`     // notifications already sent, by key
+	DriftAt   time.Time            `json:"drift_at"` // when the current distraction started
+	Trouble   map[string]Trouble   `json:"trouble,omitempty"`
 }
+
+// trouble records a problem, keeping the time it started.
+func (s *State) trouble(key, msg string) {
+	t, ok := s.Trouble[key]
+	if !ok {
+		t.Since = now()
+	}
+	t.Msg = msg
+	s.Trouble[key] = t
+}
+
+func (s *State) fixed(key string) { delete(s.Trouble, key) }
 
 func dataDir() string {
 	if d := os.Getenv("EDGE_HOME"); d != "" {
@@ -105,10 +147,8 @@ func loadRaw() (*State, []byte, error) {
 				return nil, nil, fmt.Errorf("state.json is corrupt and there's no good backup: %w", perr)
 			}
 			b = nil // force a save, which repairs state.json
-			if s.Trouble == nil {
-				s.Trouble = map[string]string{}
-			}
-			s.Trouble["state"] = "state.json was corrupt; restored the backup from " + modTime(statePath()+".bak")
+			s.init()
+			s.trouble("state", "state.json was corrupt; restored the backup from "+modTime(statePath()+".bak"))
 		}
 	}
 	s.init()
@@ -135,7 +175,13 @@ func (s *State) init() {
 		s.CFTried = map[string]bool{}
 	}
 	if s.Trouble == nil {
-		s.Trouble = map[string]string{}
+		s.Trouble = map[string]Trouble{}
+	}
+	if s.Sync == nil {
+		s.Sync = map[string]*syncLeg{}
+	}
+	if s.AdaptFrom == nil {
+		s.AdaptFrom = map[string]time.Time{}
 	}
 }
 

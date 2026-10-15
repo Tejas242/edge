@@ -13,10 +13,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	gosync "sync"
 	"time"
 )
-
-const user = "screenager" // same on Codeforces and LeetCode
 
 type Problem struct {
 	ID      string
@@ -27,7 +26,8 @@ type Problem struct {
 	Contest int
 }
 
-var client = &http.Client{Timeout: 60 * time.Second}
+// A hanging connection must not stall a tick for long.
+var client = &http.Client{Timeout: 15 * time.Second}
 
 func fetch(req *http.Request) ([]byte, error) {
 	req.Header.Set("User-Agent", "edge/0.1")
@@ -59,22 +59,29 @@ func cacheDir() string {
 	return filepath.Join(d, "edge")
 }
 
-// cached returns the file's bytes if younger than ttl, else refetches. A stale
-// copy beats nothing when the network is down.
-func cached(name string, ttl time.Duration, f func() ([]byte, error)) ([]byte, error) {
+// cached returns the file's bytes if younger than ttl, else refetches. A
+// fetch that fails or doesn't validate keeps the old copy: stale beats nothing.
+func cached(name string, ttl time.Duration, f func() ([]byte, error), valid func([]byte) error) ([]byte, error) {
 	p := filepath.Join(cacheDir(), name)
 	if st, err := os.Stat(p); err == nil && now().Sub(st.ModTime()) < ttl {
-		return os.ReadFile(p)
+		if b, err := os.ReadFile(p); err == nil && valid(b) == nil {
+			return b, nil
+		}
 	}
 	b, err := f()
+	if err == nil {
+		err = valid(b)
+	}
 	if err != nil {
-		if old, rerr := os.ReadFile(p); rerr == nil {
+		if old, rerr := os.ReadFile(p); rerr == nil && valid(old) == nil {
 			return old, nil
 		}
 		return nil, err
 	}
-	os.MkdirAll(cacheDir(), 0o755)
-	return b, os.WriteFile(p, b, 0o644)
+	if os.MkdirAll(cacheDir(), 0o755) == nil {
+		writeAtomic(p, b, 0o644) // a cache that can't be written is still a good fetch
+	}
+	return b, nil
 }
 
 // ---- Codeforces ----
@@ -93,8 +100,20 @@ func cfURL(contest int, index string) string {
 	return fmt.Sprintf("https://codeforces.com/problemset/problem/%d/%s", contest, index)
 }
 
+var (
+	cfMu   gosync.Mutex
+	cfLast time.Time
+)
+
+// cfAPI calls the Codeforces API, at most once per 2 seconds (their limit).
 func cfAPI(method string, out any) error {
+	cfMu.Lock()
+	if wait := 2100*time.Millisecond - time.Since(cfLast); wait > 0 {
+		time.Sleep(wait)
+	}
 	b, err := get("https://codeforces.com/api/" + method)
+	cfLast = time.Now()
+	cfMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -125,7 +144,7 @@ type cfSub struct {
 
 func cfSubs(count int) ([]cfSub, error) {
 	var subs []cfSub
-	q := "user.status?handle=" + user
+	q := "user.status?handle=" + cfg().CFUser
 	if count > 0 {
 		q += "&from=1&count=" + strconv.Itoa(count)
 	}
@@ -136,7 +155,7 @@ func cfRating() (int, error) {
 	var u []struct {
 		Rating int `json:"rating"`
 	}
-	if err := cfAPI("user.info?handles="+user, &u); err != nil || len(u) == 0 {
+	if err := cfAPI("user.info?handles="+cfg().CFUser, &u); err != nil || len(u) == 0 {
 		return 0, err
 	}
 	return u[0].Rating, nil
@@ -144,7 +163,22 @@ func cfRating() (int, error) {
 
 func cfProblems() ([]Problem, error) {
 	b, err := cached("cf_problems.json", 24*time.Hour, func() ([]byte, error) {
-		return get("https://codeforces.com/api/problemset.problems")
+		var raw json.RawMessage
+		if err := cfAPI("problemset.problems", &raw); err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"status": "OK", "result": raw})
+	}, func(b []byte) error {
+		var r struct {
+			Problems []cfProblem `json:"problems"`
+		}
+		if err := cfDecode(b, &r); err != nil {
+			return err
+		}
+		if len(r.Problems) < 1000 {
+			return fmt.Errorf("codeforces: only %d problems in the list", len(r.Problems))
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -202,11 +236,33 @@ func lcProfile() (rating int, recent []lcAC, err error) {
 		Recent []lcAC `json:"recentAcSubmissionList"`
 	}
 	err = lcQuery(`query($u:String!){userContestRanking(username:$u){rating}
-		recentAcSubmissionList(username:$u,limit:20){titleSlug timestamp}}`, map[string]any{"u": user}, &r)
+		recentAcSubmissionList(username:$u,limit:20){titleSlug timestamp}}`, map[string]any{"u": cfg().LCUser}, &r)
 	if r.Rank != nil {
 		rating = int(r.Rank.Rating)
 	}
 	return rating, r.Recent, err
+}
+
+// lcSub is one of the user's recent LeetCode submissions, any verdict.
+type lcSub struct {
+	Slug   string `json:"titleSlug"`
+	Time   string `json:"timestamp"`
+	Status string `json:"statusDisplay"` // "Accepted", "Wrong Answer", ...
+}
+
+func (x lcSub) unix() int64 {
+	ts, _ := strconv.ParseInt(x.Time, 10, 64)
+	return ts
+}
+
+// lcSubs is the public recent-submissions list (last 20, all verdicts).
+func lcSubs() ([]lcSub, error) {
+	var r struct {
+		Subs []lcSub `json:"recentSubmissionList"`
+	}
+	err := lcQuery(`query($u:String!){recentSubmissionList(username:$u,limit:20){titleSlug timestamp statusDisplay}}`,
+		map[string]any{"u": cfg().LCUser}, &r)
+	return r.Subs, err
 }
 
 type lcQ struct {
@@ -242,6 +298,15 @@ func lcQuestions() (map[string]lcQ, error) {
 			time.Sleep(300 * time.Millisecond)
 		}
 		return json.Marshal(all)
+	}, func(b []byte) error {
+		var all []lcQ
+		if err := json.Unmarshal(b, &all); err != nil {
+			return err
+		}
+		if len(all) < 1000 {
+			return fmt.Errorf("leetcode: only %d questions in the list", len(all))
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -265,6 +330,11 @@ func lcProblems() ([]Problem, error) {
 	}
 	b, err := cached("lc_ratings.txt", 7*24*time.Hour, func() ([]byte, error) {
 		return get("https://raw.githubusercontent.com/zerotrac/leetcode_problem_rating/main/ratings.txt")
+	}, func(b []byte) error {
+		if n := bytes.Count(b, []byte("\n")); n < 1000 || !bytes.Contains(b[:min(len(b), 200)], []byte("\t")) {
+			return fmt.Errorf("zerotrac ratings: unexpected file (%d lines)", n)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -292,7 +362,10 @@ func lcProblems() ([]Problem, error) {
 	return out, nil
 }
 
-var tagRe = regexp.MustCompile(`<[^>]+>`)
+var (
+	tagRe   = regexp.MustCompile(`<[^>]+>`)
+	blankRe = regexp.MustCompile(`\n{3,}`)
+)
 
 func lcStatement(slug string) (string, error) {
 	var r struct {
@@ -302,5 +375,5 @@ func lcStatement(slug string) (string, error) {
 	}
 	err := lcQuery(`query($s:String!){question(titleSlug:$s){content}}`, map[string]any{"s": slug}, &r)
 	txt := html.UnescapeString(tagRe.ReplaceAllString(r.Q.Content, ""))
-	return strings.TrimSpace(regexp.MustCompile(`\n{3,}`).ReplaceAllString(txt, "\n\n")), err
+	return strings.TrimSpace(blankRe.ReplaceAllString(txt, "\n\n")), err
 }

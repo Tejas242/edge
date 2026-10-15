@@ -43,6 +43,18 @@ func install() error {
 	}
 	fmt.Println("skills →", dst)
 
+	if p := configPath(); !exists(p) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(p, []byte(defaultConfigText), 0o644); err != nil {
+			return err
+		}
+		fmt.Println("config →", p)
+	} else {
+		fmt.Println("config →", p, "(kept)")
+	}
+
 	raw, err := os.ReadFile(settingsPath())
 	if err != nil {
 		return err
@@ -82,6 +94,8 @@ After=graphical-session.target
 ExecStart=%s %s
 Restart=always
 RestartSec=10
+# windows edge opens (editor, Claude) must outlive a restart or update
+KillMode=process
 Environment=PATH=%%h/.local/bin:/usr/local/bin:/usr/bin
 
 [Install]

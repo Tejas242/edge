@@ -3,21 +3,22 @@ package main
 import (
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"strings"
 	"time"
 )
 
-// Hint policies are experiment arms. Each new problem gets one at random
-// (balanced); retention is measured later by cold re-solves (probes).
+// Hint policies are experiment arms. Each new problem gets one when it
+// starts (balanced); retention is measured by its first cold re-solve.
 //
-//	ladder:  hint level 1/2/3 unlock at 20/35/50 min; give-up from 60 min
+//	ladder:  hint level 1/2/3 unlock after [hints] ladder_min of work; give-up after giveup_min
 //	instant: any hint level any time
-//	cold:    probes and re-entry; no hints, a give-up just reschedules
-var ladderAt = []time.Duration{20 * time.Minute, 35 * time.Minute, 50 * time.Minute}
+//	cold:    re-solves and warm-ups; no hints, a give-up just reschedules
+//
+// Times are work time (Task.Worked), so a suspended laptop unlocks nothing.
 
-const ladderGiveup = 60 * time.Minute
-
-// hintAllowance says which hint level the task may get now, and when the next unlocks.
+// hintAllowance says which hint level the task may get now, and how much
+// more work unlocks the next.
 func hintAllowance(t *Task) (level int, next time.Duration) {
 	if !t.Active() {
 		return 0, 0
@@ -26,8 +27,8 @@ func hintAllowance(t *Task) (level int, next time.Duration) {
 	case "instant":
 		return 3, 0
 	case "ladder":
-		el := now().Sub(t.Started)
-		for i, at := range ladderAt {
+		el := t.Worked()
+		for i, at := range cfg().LadderAt {
 			if el < at {
 				return i, at - el
 			}
@@ -39,36 +40,39 @@ func hintAllowance(t *Task) (level int, next time.Duration) {
 
 func canGiveUp(t *Task) (bool, time.Duration) {
 	if !t.Active() {
-		return false, ladderGiveup
+		return false, cfg().GiveUpAt
 	}
 	if t.Policy == "ladder" {
-		if el := now().Sub(t.Started); el < ladderGiveup {
-			return false, ladderGiveup - el
+		if el := t.Worked(); el < cfg().GiveUpAt {
+			return false, cfg().GiveUpAt - el
 		}
 	}
 	return true, 0
 }
 
 type armStats struct {
-	New, Solo     int
-	Probes, Pass  int
-	MinutesToDone []float64
+	New, Solo    int
+	Probes, Pass int
 }
 
+// arms tallies each arm. Retention counts one result per problem: its first
+// attempt at the first re-solve, which comes after the same delay for every
+// problem. Retries and later stages are practice, not evidence.
 func (s *State) arms() map[string]*armStats {
 	m := map[string]*armStats{"ladder": {}, "instant": {}}
+	counted := map[string]bool{}
 	for _, t := range s.History {
-		if t.Kind == "new" {
-			if a, ok := m[t.Policy]; ok && t.Outcome != "skipped" {
+		if t.Kind == "new" && !t.Known {
+			if a, ok := m[t.Policy]; ok && (t.Outcome == "solo" || t.Outcome == "assisted" || t.Outcome == "gaveup") {
 				a.New++
 				if t.Outcome == "solo" {
 					a.Solo++
 				}
 			}
 		}
-		// A probe's arm is the arm of the original attempt it re-tests.
-		if t.Kind == "resolve" && t.Outcome != "skipped" {
+		if t.Kind == "resolve" && t.ProbeStage == 1 && t.ProbeTry == 0 && !counted[t.ID] && t.Outcome != "" {
 			if a, ok := m[t.Arm]; ok {
+				counted[t.ID] = true
 				a.Probes++
 				if t.Outcome == "solo" {
 					a.Pass++
@@ -81,24 +85,26 @@ func (s *State) arms() map[string]*armStats {
 
 // probBetter is P(rate_a > rate_b) under Beta(1+pass, 1+fail) posteriors,
 // estimated by sampling.
+// The seed is fixed, so the same data always gives the same answer.
 func probBetter(passA, nA, passB, nB int) float64 {
 	const draws = 20000
+	rng := rand.New(rand.NewPCG(1, 2))
 	win := 0
 	for i := 0; i < draws; i++ {
-		if betaSample(1+float64(passA), 1+float64(nA-passA)) > betaSample(1+float64(passB), 1+float64(nB-passB)) {
+		if betaSample(rng, 1+float64(passA), 1+float64(nA-passA)) > betaSample(rng, 1+float64(passB), 1+float64(nB-passB)) {
 			win++
 		}
 	}
 	return float64(win) / draws
 }
 
-func betaSample(a, b float64) float64 {
-	x, y := gammaSample(a), gammaSample(b)
+func betaSample(rng *rand.Rand, a, b float64) float64 {
+	x, y := gammaSample(rng, a), gammaSample(rng, b)
 	return x / (x + y)
 }
 
 // gammaSample uses Marsaglia–Tsang (shape >= 1, which Beta(1+k, ...) always is).
-func gammaSample(k float64) float64 {
+func gammaSample(rng *rand.Rand, k float64) float64 {
 	d := k - 1.0/3
 	c := 1 / math.Sqrt(9*d)
 	for {
@@ -115,9 +121,11 @@ func gammaSample(k float64) float64 {
 	}
 }
 
+// The experiment is decided once, when both arms have this many first
+// re-solves: no peeking at a running posterior and stopping on a lucky streak.
 const (
-	minProbesPerArm = 10
-	winnerConf      = 0.95
+	probesPerArm = 30
+	winnerConf   = 0.95
 )
 
 func (s *State) experimentReport() string {
@@ -127,27 +135,40 @@ func (s *State) experimentReport() string {
 	b.WriteString("Experiment: which hint style makes solutions stick?\n")
 	for _, name := range []string{"ladder", "instant"} {
 		a := m[name]
-		fmt.Fprintf(&b, "  %-8s new %2d (solo %2d)   cold re-solves %2d/%-2d", name, a.New, a.Solo, a.Pass, a.Probes)
-		if a.Probes > 0 {
-			fmt.Fprintf(&b, " = %3.0f%%", 100*float64(a.Pass)/float64(a.Probes))
-		}
-		b.WriteString("\n")
+		fmt.Fprintf(&b, "  %-8s new %2d (solo %2d)   first re-solves %2d/%d\n", name, a.New, a.Solo, a.Probes, probesPerArm)
 	}
-	if l.Probes == 0 || i.Probes == 0 {
-		b.WriteString("  No retention data yet: it comes from re-solves 3+ days after a problem.\n")
+	if l.Probes < probesPerArm || i.Probes < probesPerArm {
+		fmt.Fprintf(&b, "  Running: the verdict comes once both styles have %d first re-solves.\n", probesPerArm)
 		return b.String()
 	}
-	p := probBetter(l.Pass, l.Probes, i.Pass, i.Probes)
-	fmt.Fprintf(&b, "  P(ladder retains better than instant) = %.0f%%\n", 100*p)
+	// Exactly the first probesPerArm of each, so later data can't flip it.
+	lp, ip := s.firstPasses("ladder"), s.firstPasses("instant")
+	p := probBetter(lp, probesPerArm, ip, probesPerArm)
+	fmt.Fprintf(&b, "  retained: ladder %d/%d, instant %d/%d · P(ladder better) = %.0f%%\n", lp, probesPerArm, ip, probesPerArm, 100*p)
 	switch {
-	case l.Probes < minProbesPerArm || i.Probes < minProbesPerArm:
-		fmt.Fprintf(&b, "  Too early: need %d re-solves per style before calling it.\n", minProbesPerArm)
 	case p >= winnerConf:
 		b.WriteString("  Verdict: hints that unlock over time work better for you.\n")
 	case p <= 1-winnerConf:
 		b.WriteString("  Verdict: on-demand hints work better for you. Struggling longer isn't paying off.\n")
 	default:
-		b.WriteString("  No clear winner yet, so the experiment keeps running.\n")
+		b.WriteString("  Verdict: no real difference. Use whichever style you like.\n")
 	}
 	return b.String()
+}
+
+// firstPasses counts passes among an arm's first probesPerArm first re-solves.
+func (s *State) firstPasses(arm string) int {
+	n, pass := 0, 0
+	counted := map[string]bool{}
+	for _, t := range s.History {
+		if t.Kind != "resolve" || t.ProbeStage != 1 || t.ProbeTry != 0 || counted[t.ID] || t.Arm != arm || n >= probesPerArm {
+			continue
+		}
+		counted[t.ID] = true
+		n++
+		if t.Outcome == "solo" {
+			pass++
+		}
+	}
+	return pass
 }

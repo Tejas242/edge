@@ -19,36 +19,45 @@ func solutionPath(t *Task) string {
 	return filepath.Join(workDir(), "leetcode", strings.TrimPrefix(t.ID, "lc:")+".cpp")
 }
 
-// prepare gets the file ready for a fresh attempt. An old solution (a cold
-// re-solve, or an earlier try) is moved into edge's archive first: nothing to
-// peek at, and competitest doesn't stop to ask about overwriting.
-func prepare(t *Task) (string, error) {
+// archive moves an old solution (a cold re-solve, or an earlier try) into
+// edge's archive when the task is assigned: nothing to peek at, and
+// competitest doesn't stop to ask about overwriting.
+func archive(t *Task) {
 	p := solutionPath(t)
-	if st, err := os.Stat(p); err == nil && st.ModTime().Before(t.Assigned) {
-		arch := filepath.Join(dataDir(), "archive")
-		os.MkdirAll(arch, 0o755)
-		dst := filepath.Join(arch, fmt.Sprintf("%s-%d.cpp", strings.ReplaceAll(t.ID, ":", "-"), st.ModTime().Unix()))
-		if err := os.Rename(p, dst); err != nil {
-			return "", err
-		}
+	st, err := os.Stat(p)
+	if err != nil || !st.ModTime().Before(t.Assigned) {
+		return
 	}
-	if t.Source() == "cf" {
-		return p, nil
+	dir := filepath.Join(dataDir(), "archive")
+	os.MkdirAll(dir, 0o755)
+	base := fmt.Sprintf("%s-%d", strings.ReplaceAll(t.ID, ":", "-"), st.ModTime().Unix())
+	dst := filepath.Join(dir, base+".cpp")
+	for i := 2; exists(dst); i++ {
+		dst = filepath.Join(dir, fmt.Sprintf("%s-%d.cpp", base, i))
 	}
-	if _, err := os.Stat(p); err == nil {
-		return p, nil // work in progress
+	if err := os.Rename(p, dst); err != nil {
+		fmt.Fprintln(os.Stderr, "edge: couldn't archive the old solution:", err)
+	}
+}
+
+// scaffold writes a LeetCode starter file if there isn't one. Codeforces
+// files come from competitest. Network: call it outside the lock.
+func scaffold(t *Task) error {
+	p := solutionPath(t)
+	if t.Source() != "lc" || exists(p) {
+		return nil
 	}
 	slug := strings.TrimPrefix(t.ID, "lc:")
 	starter, err := lcStarter(slug)
 	if err != nil {
-		return "", err
+		return err
 	}
-	body := fmt.Sprintf("/**\n * author: screenager\n * created: %s\n * %s\n **/\n#include <bits/stdc++.h>\n\nusing namespace std;\n\n%s\n",
-		now().Format("Monday 02 January 2006 03:04:05 PM"), t.URL, starter)
+	body := fmt.Sprintf("/**\n * author: %s\n * created: %s\n * %s\n **/\n#include <bits/stdc++.h>\n\nusing namespace std;\n\n%s\n",
+		cfg().LCUser, now().Format("Monday 02 January 2006 03:04:05 PM"), t.URL, starter)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return "", err
+		return err
 	}
-	return p, os.WriteFile(p, []byte(body), 0o644)
+	return os.WriteFile(p, []byte(body), 0o644)
 }
 
 func lcStarter(slug string) (string, error) {
