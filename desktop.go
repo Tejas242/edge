@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	gosync "sync"
 	"syscall"
@@ -87,9 +89,50 @@ func focused() window {
 	var w struct {
 		AppID string `json:"app_id"`
 		Title string `json:"title"`
+		PID   int    `json:"pid"`
 	}
 	json.Unmarshal(out, &w)
-	return window{App: w.AppID, Title: w.Title}
+	return window{App: w.AppID, Title: w.Title, PID: w.PID}
+}
+
+// procCwds is the working directories of every process under pid (not pid
+// itself: a terminal's own cwd is wherever it was launched from). Swapped
+// in tests.
+var procCwds = func(pid int) []string {
+	ents, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	kids := map[int][]int{}
+	for _, e := range ents {
+		p, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		b, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		// pid (comm) state ppid ...: comm may hold spaces, so split after ')'
+		st := string(b)
+		f := strings.Fields(st[strings.LastIndexByte(st, ')')+1:])
+		if len(f) < 2 {
+			continue
+		}
+		pp, _ := strconv.Atoi(f[1])
+		kids[pp] = append(kids[pp], p)
+	}
+	var cwds []string
+	queue := slices.Clone(kids[pid])
+	for len(queue) > 0 && len(cwds) < 256 {
+		p := queue[0]
+		queue = queue[1:]
+		if d, err := os.Readlink("/proc/" + strconv.Itoa(p) + "/cwd"); err == nil {
+			cwds = append(cwds, d)
+		}
+		queue = append(queue, kids[p]...)
+	}
+	return cwds
 }
 
 // spawn starts a program outside edge's service, through niri when it's

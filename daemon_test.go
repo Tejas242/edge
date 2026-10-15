@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -147,22 +149,46 @@ func TestBeginPicksPolicyAtStart(t *testing.T) {
 }
 
 func TestWorkTracking(t *testing.T) {
+	fresh(t)
+	ws := workDir()
+	old := procCwds
+	t.Cleanup(func() { procCwds = old })
+	procCwds = func(pid int) []string {
+		return map[int][]string{
+			1: {"/home/x", filepath.Join(ws, "codeforces")}, // zsh at ~, nvim in ~/CP
+			2: {"/home/x/Gems/kinvault"},                    // another project
+		}[pid]
+	}
 	task := &Task{Title: "Spying on the Beaver"}
 	for _, c := range []struct {
 		w     window
 		fresh bool
 		want  bool
 	}{
-		{window{App: "Alacritty", Title: "nvim C.cpp"}, false, true},
+		{window{App: "Alacritty", Title: "nvim C.cpp", PID: 1}, false, true},
+		{window{App: "Alacritty", Title: "◑ Claude session", PID: 2}, false, false},
+		{window{App: "Alacritty", Title: "x"}, false, false},
 		{window{App: "zen", Title: "Problem - 2257C - Codeforces — Zen Browser"}, false, true},
 		{window{App: "zen", Title: "Spying on the Beaver - LeetCode"}, false, true},
 		{window{App: "zen", Title: "lofi beats - YouTube — Zen Browser"}, false, false},
 		{window{App: "zen", Title: "lofi beats - YouTube — Zen Browser"}, true, true},
 		{window{}, false, false},
 	} {
-		if got := working(c.w, task, c.fresh); got != c.want {
+		if got := working(c.w, task, c.fresh, ws); got != c.want {
 			t.Errorf("%+v fresh=%v: %v", c.w, c.fresh, got)
 		}
+	}
+}
+
+func TestProcCwdsFindsChildren(t *testing.T) {
+	cmd := exec.Command("sleep", "5")
+	cmd.Dir = t.TempDir()
+	if err := cmd.Start(); err != nil {
+		t.Skip(err)
+	}
+	defer cmd.Process.Kill()
+	if !slices.Contains(procCwds(os.Getpid()), cmd.Dir) {
+		t.Fatalf("child cwd %s not found in %v", cmd.Dir, procCwds(os.Getpid()))
 	}
 }
 

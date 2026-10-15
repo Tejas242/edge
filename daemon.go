@@ -29,21 +29,25 @@ type event struct {
 // slot groups events so a newer one replaces the older on screen.
 func (e event) slot() string { return strings.SplitN(e.Key, ":", 2)[0] }
 
-type window struct{ App, Title string }
+type window struct {
+	App, Title string
+	PID        int // the window's process, for terminals
+}
 
 var terminals = []string{"alacritty", "kitty", "foot", "ghostty", "wezterm", "konsole", "terminal", "xterm"}
 
 // working: does the screen say they're on the problem? The problem or a
-// judge in the browser, any terminal (editor, compiler, Claude), or a
-// solution file saved in the last few minutes.
-func working(w window, t *Task, fileFresh bool) bool {
+// judge in the browser, a terminal whose programs (shell, editor, Claude)
+// are working inside the practice workspace, or a solution file saved in the
+// last few minutes. A terminal on another project doesn't count.
+func working(w window, t *Task, fileFresh bool, ws string) bool {
 	if fileFresh {
 		return true
 	}
 	app, title := strings.ToLower(w.App), strings.ToLower(w.Title)
 	for _, term := range terminals {
 		if strings.Contains(app, term) {
-			return true
+			return w.PID > 0 && slices.ContainsFunc(procCwds(w.PID), func(d string) bool { return under(d, ws) })
 		}
 	}
 	for _, k := range []string{"codeforces", "leetcode", "cp-algorithms", "usaco.guide"} {
@@ -137,7 +141,7 @@ func step(s *State, w window, g gathered, dt time.Duration) []event {
 		if st, err := os.Stat(solutionPath(t)); err == nil {
 			fresh = n.Sub(st.ModTime()) < editFresh
 		}
-		if working(w, t, fresh) {
+		if working(w, t, fresh, s.practiceDir()) {
 			t.WorkSec += int(dt.Seconds())
 		}
 	}
