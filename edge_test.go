@@ -421,7 +421,7 @@ func TestStreak(t *testing.T) {
 		t.Fatalf("Tue+Mon met, Sun didn't (1/3): streak %d", n)
 	}
 	s.Passes = append(s.Passes, wed.AddDate(0, 0, -3)) // Sunday
-	for i := 0; i < 3; i++ {                            // Saturday 3/3
+	for i := 0; i < 3; i++ {                           // Saturday 3/3
 		end := wed.AddDate(0, 0, -4).Add(-time.Duration(i) * time.Hour)
 		solved(s, "cf:1A", "solo", end.Add(-time.Hour), end)
 	}
