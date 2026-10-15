@@ -101,6 +101,9 @@ func (s *State) passUsedThisWeek() bool {
 }
 
 func workDir() string {
+	if d := os.Getenv("EDGE_WORK"); d != "" {
+		return d // tests: never touch the real ~/CP
+	}
 	h, _ := os.UserHomeDir()
 	return filepath.Join(h, "CP")
 }

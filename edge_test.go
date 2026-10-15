@@ -10,6 +10,21 @@ import (
 	"time"
 )
 
+// TestMain points HOME and every edge dir at a scratch dir, so no test can
+// touch the real ~/CP, state or Claude settings.
+func TestMain(m *testing.M) {
+	d, err := os.MkdirTemp("/var/tmp", "edge-test") // not /tmp: the gate allows /tmp
+	if err != nil {
+		panic(err)
+	}
+	for k, v := range map[string]string{"HOME": d, "EDGE_HOME": d + "/data", "EDGE_WORK": d + "/CP", "EDGE_CACHE": d + "/cache"} {
+		os.Setenv(k, v)
+	}
+	code := m.Run()
+	os.RemoveAll(d)
+	os.Exit(code)
+}
+
 // Wednesday 14 Oct 2026, 21:00 local.
 var wed = time.Date(2026, 10, 14, 21, 0, 0, 0, time.Local)
 
@@ -22,6 +37,7 @@ func at(t *testing.T, when time.Time) {
 
 func fresh(t *testing.T) *State {
 	t.Setenv("EDGE_HOME", t.TempDir())
+	t.Setenv("EDGE_CACHE", t.TempDir())
 	s, err := load()
 	if err != nil {
 		t.Fatal(err)
@@ -336,14 +352,23 @@ func TestGatePromptPracticeOnlyWhileClosed(t *testing.T) {
 	}
 }
 
-func TestPatchSettingsOnRealCopy(t *testing.T) {
-	h, _ := os.UserHomeDir()
-	raw, err := os.ReadFile(filepath.Join(h, ".claude", "settings.json"))
-	if err != nil {
-		t.Skip("no settings")
-	}
+const settingsFixture = `{
+  "model": "opus",
+  "statusLine": {"type": "command", "command": "a <b> & c"},
+  "hooks": {
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/old/path/edge gate", "timeout": 10}]}],
+    "PreToolUse": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "\"/old path/edge\" hook"}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "ember hook"}]}
+    ],
+    "Notification": {"weird": "not an array"}
+  },
+  "permissions": {"allow": ["Bash(ls:*)"]}
+}`
+
+func TestPatchSettings(t *testing.T) {
 	exe := "/home/x/.local/bin/edge"
-	out, err := patchSettings(raw, exe)
+	out, err := patchSettings([]byte(settingsFixture), exe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +377,7 @@ func TestPatchSettingsOnRealCopy(t *testing.T) {
 		t.Fatal("patch must be idempotent")
 	}
 	var before, after map[string]any
-	json.Unmarshal(raw, &before)
+	json.Unmarshal([]byte(settingsFixture), &before)
 	json.Unmarshal(out, &after)
 	for k, v := range before {
 		if k == "hooks" || k == "permissions" {
@@ -363,7 +388,21 @@ func TestPatchSettingsOnRealCopy(t *testing.T) {
 		}
 	}
 	s := string(out)
-	if strings.Contains(s, "edge gate") || strings.Count(s, exe+" hook") != 2 {
-		t.Fatalf("want 2 gate entries and no old gate entries:\n%s", s)
+	if strings.Contains(s, "edge gate") || strings.Contains(s, "old path") || strings.Count(s, exe+" hook") != 2 {
+		t.Fatalf("want 2 gate entries and no old edge entries:\n%s", s)
+	}
+	if !strings.Contains(s, "ember hook") || !strings.Contains(s, "not an array") || !strings.Contains(s, "a <b> & c") {
+		t.Fatalf("other hooks and odd values must survive:\n%s", s)
+	}
+}
+
+func TestContestOf(t *testing.T) {
+	for id, want := range map[string]string{"cf:1360E": "1360", "cf:1360E1": "1360", "cf:2247D2": "2247", "cf:4A": "4"} {
+		if got := contestOf(id); got != want {
+			t.Errorf("contestOf(%s) = %s, want %s", id, got, want)
+		}
+	}
+	if p := solutionPath(&Task{ID: "cf:1360E1"}); !strings.HasSuffix(p, "codeforces/1360/E1.cpp") {
+		t.Errorf("path %s", p)
 	}
 }

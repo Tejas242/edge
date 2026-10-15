@@ -232,9 +232,13 @@ func revealWhy(t *Task) {
 	}
 }
 
+// contestOf is the leading digits of a CF id: "cf:1360E1" → "1360".
 func contestOf(id string) string {
 	s := strings.TrimPrefix(id, "cf:")
-	return strings.TrimRightFunc(s, func(r rune) bool { return r < '0' || r > '9' })
+	if i := strings.IndexFunc(s, func(r rune) bool { return r < '0' || r > '9' }); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func skip(s *State, seen bool) error {

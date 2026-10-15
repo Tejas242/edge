@@ -125,7 +125,10 @@ func patchSettings(raw []byte, exe string) ([]byte, error) {
 	hookCmd := exe + " hook"
 	// drop older edge entries (gate, gate-tool) and re-add one per event
 	for event, v := range hooks {
-		list, _ := v.([]any)
+		list, ok := v.([]any)
+		if !ok {
+			continue // not ours, and not a shape we understand: leave it alone
+		}
 		kept := list[:0]
 		for _, entry := range list {
 			if !isEdgeHook(entry) {
@@ -172,9 +175,10 @@ func patchSettings(raw []byte, exe string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-var edgeCmd = regexp.MustCompile(`(^|/)edge (gate|gate-tool|hook)$`)
+// edgeCmd matches edge's own hook commands from any install path, quoted or not.
+var edgeCmd = regexp.MustCompile(`^(?:"[^"]*/edge"|'[^']*/edge'|\S*/edge|edge)\s+(?:gate|gate-tool|hook)(?:\s|$)`)
 
-// isEdgeHook reports whether a settings hook entry runs edge or Ember (any install path).
+// isEdgeHook reports whether a settings hook entry runs edge (any install path).
 func isEdgeHook(entry any) bool {
 	m, _ := entry.(map[string]any)
 	hs, _ := m["hooks"].([]any)
