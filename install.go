@@ -43,16 +43,8 @@ func install() error {
 	}
 	fmt.Println("skills →", dst)
 
-	if p := configPath(); !exists(p) {
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(p, []byte(defaultConfigText), 0o644); err != nil {
-			return err
-		}
-		fmt.Println("config →", p)
-	} else {
-		fmt.Println("config →", p, "(kept)")
+	if err := writeDefaultConfig(); err != nil {
+		return err
 	}
 
 	raw, err := os.ReadFile(settingsPath())
@@ -83,6 +75,23 @@ func install() error {
 		return err
 	}
 	return installService(exe)
+}
+
+// writeDefaultConfig writes config.toml with every default, if there's none.
+func writeDefaultConfig() error {
+	p := configPath()
+	if exists(p) {
+		fmt.Println("config →", p, "(kept)")
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(p, []byte(defaultConfigText), 0o644); err != nil {
+		return err
+	}
+	fmt.Println("config →", p)
+	return nil
 }
 
 const unit = `[Unit]

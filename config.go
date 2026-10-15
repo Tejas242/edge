@@ -309,9 +309,9 @@ func parseConfig(path string) (*Config, []string) {
 			}
 			c.Sources = srcs
 		case "problems.cf_rating":
-			num(0, 4000, func(x int) { c.Rating["cf"] = x })
+			num(0, 4000, func(x int) { setRating(c.Rating, "cf", x) })
 		case "problems.lc_rating":
-			num(0, 4000, func(x int) { c.Rating["lc"] = x })
+			num(0, 4000, func(x int) { setRating(c.Rating, "lc", x) })
 		case "problems.band_width":
 			num(100, 1000, func(x int) { c.BandWidth = x })
 		case "problems.any_topic_pct":
@@ -443,5 +443,14 @@ func (s *State) rules() Rules {
 func (s *State) pin() {
 	if r := s.rules(); s.Pinned == nil || !s.Pinned.Day.Equal(r.Day) {
 		s.Pinned = &r
+	}
+}
+
+// setRating pins a source's band base; 0 means "use the live rating".
+func setRating(m map[string]int, src string, x int) {
+	if x > 0 {
+		m[src] = x
+	} else {
+		delete(m, src)
 	}
 }

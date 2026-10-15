@@ -702,3 +702,19 @@ func TestUpdateSkipsUnchangedWrites(t *testing.T) {
 		t.Fatal("a no-op update rewrote state.json")
 	}
 }
+
+func TestDefaultConfigTextMatchesDefaults(t *testing.T) {
+	writeConfig(t, defaultConfigText)
+	c, d := cfg(), defaultConfig()
+	if len(confErrs) != 0 {
+		t.Fatalf("the shipped config must parse cleanly: %v", confErrs)
+	}
+	if fmt.Sprint(c.Focus) != fmt.Sprint(d.Focus) || c.Distraction.String() != d.Distraction.String() ||
+		fmt.Sprint(c.LadderAt, c.Sources, c.Rating) != fmt.Sprint(d.LadderAt, d.Sources, d.Rating) {
+		t.Fatal("config.toml as shipped must mean exactly the defaults")
+	}
+	c.Focus, d.Focus, c.Distraction, d.Distraction, c.LadderAt, d.LadderAt, c.Sources, d.Sources, c.Rating, d.Rating = nil, nil, nil, nil, nil, nil, nil, nil, nil, nil
+	if fmt.Sprintf("%+v", *c) != fmt.Sprintf("%+v", *d) {
+		t.Fatalf("shipped text differs from defaults:\n%+v\n%+v", *c, *d)
+	}
+}

@@ -55,6 +55,9 @@ func main() {
 		fmt.Print(s.experimentReport())
 		return
 	case "config":
+		if len(args) == 1 && args[0] == "init" {
+			check(writeDefaultConfig())
+		}
 		fmt.Print(configReport())
 		return
 	}
@@ -171,7 +174,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: edge daemon|hook|action <key>|install|status|config|next|start|stuck [--take N]|done|giveup|skip [--seen]|explain [0-2]|report|pass|sync")
+	fmt.Fprintln(os.Stderr, "usage: edge daemon|hook|action <key>|install|status|config [init]|next|start|stuck [--take N]|done|giveup|skip [--seen]|explain [0-2]|report|pass|sync")
 	os.Exit(2)
 }
 
