@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -50,7 +52,7 @@ func working(w window, t *Task, fileFresh bool, ws string) bool {
 			return w.PID > 0 && slices.ContainsFunc(procCwds(w.PID), func(d string) bool { return under(d, ws) })
 		}
 	}
-	for _, k := range []string{"codeforces", "leetcode", "cp-algorithms", "usaco.guide"} {
+	for _, k := range []string{"codeforces", "leetcode", "atcoder", "cp-algorithms", "usaco.guide"} {
 		if strings.Contains(title, k) {
 			return true
 		}
@@ -89,6 +91,14 @@ func step(s *State, w window, g gathered, dt time.Duration) []event {
 	for _, d := range g.syncs {
 		s.applySync(d)
 	}
+	for _, c := range g.cals {
+		s.applyCal(c)
+	}
+	for _, o := range g.obs {
+		s.applyObs(o)
+	}
+	s.planRounds()
+	s.tidyRounds()
 	if g.gateOK != nil {
 		if *g.gateOK {
 			s.fixed("gate")
@@ -128,15 +138,18 @@ func step(s *State, w window, g gathered, dt time.Duration) []event {
 				s.trouble(t.Source(), fmt.Sprintf("can't reach %s to check your submissions: %v", srcName(t.Source()), j.Err))
 			} else {
 				s.fixed(t.Source())
-				if t.Source() == "cf" {
+				switch t.Source() {
+				case "cf":
 					evs = append(evs, processCF(s, t, j.CF)...)
-				} else {
+				case "ac":
+					evs = append(evs, processAC(s, t, j.AC)...)
+				default:
 					evs = append(evs, processLC(s, t, j.LC)...)
 				}
 			}
 		}
 	}
-	if t := s.Current; t != nil && t.Active() {
+	if t := s.Current; t != nil && t.Active() && s.liveHeld() == nil { // a round's time isn't the task's
 		fresh := false
 		if st, err := os.Stat(solutionPath(t)); err == nil {
 			fresh = n.Sub(st.ModTime()) < editFresh
@@ -186,17 +199,19 @@ func plan(s *State, w window, dt time.Duration) []event {
 	got, need := s.today()
 	var evs []event
 
-	if n.Hour() >= 7 || n.Sub(day(n)) >= 24*time.Hour {
+	// in a live round: the round and edge's health, nothing else
+	live := s.liveHeld()
+	if live == nil && (n.Hour() >= 7 || n.Sub(day(n)) >= 24*time.Hour) {
 		evs = append(evs, event{Key: "brief:" + date, Title: "edge · today", Body: briefing(s)})
 	}
-	if n.Hour() >= 22 && s.closed() {
+	if n.Hour() >= 22 && s.closed() && live == nil {
 		evs = append(evs, event{Key: "late:" + date, Urgent: true, Title: fmt.Sprintf("%d task(s) left today", need-got),
 			Body: "Claude stays locked outside " + tilde(s.practiceDir()) + " until it's done."})
 	}
 	for _, k := range slices.Sorted(mapsKeys(s.Trouble)) {
 		tr := s.Trouble[k]
 		wait := time.Duration(0)
-		if k == "cf" || k == "lc" || strings.HasPrefix(k, "sync-") {
+		if k == "cf" || k == "lc" || k == "ac" || strings.HasPrefix(k, "sync-") || strings.HasPrefix(k, "cal-") {
 			wait = troubleAfter // the judges blip; say so only when it lasts
 		}
 		if n.Sub(tr.Since) >= wait {
@@ -206,6 +221,10 @@ func plan(s *State, w window, dt time.Duration) []event {
 			}
 			evs = append(evs, event{Key: "health:" + k + ":" + date, Title: "edge needs a look", Body: body})
 		}
+	}
+	evs = append(evs, s.roundEvents(w, dt)...)
+	if live != nil {
+		return evs
 	}
 	if t := s.lastSolved(); t != nil && n.Sub(t.Finished) < 12*time.Hour {
 		evs = append(evs, acceptedEvent(s, t))
@@ -282,6 +301,8 @@ func offerTitle(t *Task) string {
 		return "Re-solve due: from scratch, no hints"
 	case "reentry":
 		return "Welcome back: a 10-minute warm-up"
+	case "upsolve":
+		return "Upsolve " + t.RoundName + ": the round's next problem"
 	}
 	return "Next problem is ready"
 }
@@ -300,6 +321,12 @@ func briefing(s *State) string {
 	}
 	if g := s.gapDays(); g >= 2 {
 		b += fmt.Sprintf("\n%d days away. Today starts with an easy warm-up.", g)
+	}
+	if r := s.nextHeld(); r != nil && r.Start.Sub(now()) < 7*24*time.Hour {
+		b += fmt.Sprintf("\nNext round: %s, %s", r.Short(), clockDay(r.Start))
+	}
+	if r, p := s.nextUpsolve(); p != nil {
+		b += fmt.Sprintf("\nUpsolve %s %s by %s", r.Short(), p.Index, p.Due.Add(-time.Minute).Format("Mon"))
 	}
 	return b
 }
@@ -349,6 +376,38 @@ func processLC(s *State, t *Task, subs []lcSub) []event {
 		evs = append(evs, failEvent(t, x.Status))
 	}
 	return evs
+}
+
+func processAC(s *State, t *Task, subs []acSub) []event {
+	var mine []acSub
+	for _, x := range subs {
+		if "ac:"+x.Problem == t.ID && x.Time > t.SubSeen && x.Time >= t.Assigned.Unix()-60 {
+			mine = append(mine, x)
+		}
+	}
+	slices.SortFunc(mine, func(a, b acSub) int { return int(a.Time - b.Time) })
+	var evs []event
+	for _, x := range mine {
+		if x.Result == "WJ" || x.Result == "WR" || strings.HasSuffix(x.Result, "/") {
+			break
+		}
+		t.SubSeen = x.Time
+		at := time.Unix(x.Time, 0)
+		begin(s, t, at)
+		if x.Result == "AC" {
+			accept(s, t, at)
+			return evs
+		}
+		evs = append(evs, failEvent(t, acVerdictName(x.Result)))
+	}
+	return evs
+}
+
+func acVerdictName(v string) string {
+	if n := map[string]string{"WA": "Wrong answer", "TLE": "TLE", "MLE": "MLE", "RE": "Runtime error", "CE": "Compilation error", "OLE": "Output limit"}[v]; n != "" {
+		return n
+	}
+	return v
 }
 
 func failEvent(t *Task, title string) event {
@@ -435,12 +494,58 @@ func onAction(key string) {
 			s.Snooze = now().Add(cfg().OfferEvery)
 		case "rest":
 			s.Snooze = day(now()).AddDate(0, 0, 1).Add(cfg().DayEnds)
+		case "upsolve":
+			if t := s.Current; t != nil && t.Kind != "upsolve" {
+				if t.Active() {
+					return fmt.Errorf("finish %s first; the upsolve is next", t.Title)
+				}
+				s.Current = nil // unstarted: it comes back another day
+			}
+			if s.Current == nil {
+				if _, p := s.nextUpsolve(); p == nil {
+					return fmt.Errorf("no upsolve waiting")
+				}
+				if _, err := assign(s, nil); err != nil {
+					return err
+				}
+			}
+			t := *s.Current
+			begin(s, s.Current, now())
+			launch = func() {
+				if err := scaffold(&t); err != nil {
+					log.Println("scaffold:", err)
+				}
+				launchWork(&t)
+			}
+		case "keep":
+		case "debrief":
+			launch = func() { launchClaude("/edge-round") }
 		case "hint":
 			launch = func() { launchClaude("/edge-stuck") }
 		case "teach":
 			launch = func() { launchClaude("/edge-giveup") }
 		case "explain":
 			launch = func() { launchClaude("/edge-done") }
+		default:
+			verb, id, _ := strings.Cut(key, ":")
+			r := s.round(id)
+			if r == nil {
+				return fmt.Errorf("no round %q", id)
+			}
+			switch verb {
+			case "register":
+				u := r.regURL()
+				launch = func() { spawn(workDir(), cfg().Browser, u) }
+			case "openround":
+				rr := *r
+				launch = func() { launchRound(&rr) }
+			case "skipround":
+				if r.Joined == "live" {
+					return fmt.Errorf("you've already submitted in %s: you're in it", r.Short())
+				}
+				r.Plan = "out"
+				log.Println("can't make it:", r.ID)
+			}
 		}
 		return nil
 	})
@@ -457,7 +562,7 @@ func daemon() {
 	log.SetFlags(0)
 	log.Println("edge daemon up")
 	acts := make(chan string, 8)
-	var last emberStatus
+	var last []byte
 	var lastSent, brokenSaid, lastTick time.Time
 	var sw statsWriter
 	for {
@@ -498,9 +603,9 @@ func daemon() {
 			sw.publish(*stats)
 		}
 		// resend now and then too: Ember forgets everything when Noctalia restarts
-		if st != last || time.Since(lastSent) > time.Minute {
+		if b, _ := json.Marshal(st); !bytes.Equal(b, last) || time.Since(lastSent) > time.Minute {
 			if toEmber(map[string]any{"type": "status", "status": st}) {
-				last, lastSent = st, time.Now()
+				last, lastSent = b, time.Now()
 			}
 		}
 		var said []string

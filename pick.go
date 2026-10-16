@@ -203,14 +203,24 @@ func (s *State) pickPolicy() string {
 	return arms[0]
 }
 
-// gapDays is days since the last finished task (0 if never).
+// gapDays is days since the last credited work, a task or a round (0 if never).
 func (s *State) gapDays() int {
+	var last time.Time
 	for i := len(s.History) - 1; i >= 0; i-- {
 		if t := s.History[i]; !t.Finished.IsZero() && credit(t) > 0 {
-			return int(day(now()).Sub(day(t.Finished)).Hours() / 24)
+			last = t.Finished
+			break
 		}
 	}
-	return 0
+	for i := range s.Rounds {
+		if r := &s.Rounds[i]; r.Joined != "" && r.creditAt().After(last) && !r.creditAt().After(now()) {
+			last = r.creditAt()
+		}
+	}
+	if last.IsZero() {
+		return 0
+	}
+	return int(day(now()).Sub(day(last)).Hours() / 24)
 }
 
 // pickReentry: after a break, a short re-solve of something already beaten,

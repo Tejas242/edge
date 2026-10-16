@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -34,7 +36,16 @@ func (s *State) leg(src string) *syncLeg {
 func (s *State) syncDue(src string) bool {
 	l := s.leg(src)
 	n := now()
-	return n.Sub(l.OK) >= syncEvery && n.Sub(l.Try) >= backoff(l.Fails)
+	every := syncEvery
+	if s.awaitingRating(src) {
+		every = 30 * time.Minute // a round's rating change is due
+	}
+	if j, ok := strings.CutPrefix(src, "cal-"); ok && slices.ContainsFunc(s.Rounds, func(r Round) bool {
+		return r.Judge() == j && r.held() && r.Start.After(n) && r.Start.Sub(n) < 3*time.Hour
+	}) {
+		every = 20 * time.Minute // a held round is close: catch a delay
+	}
+	return n.Sub(l.OK) >= every && n.Sub(l.Try) >= backoff(l.Fails)
 }
 
 // syncData is one source's fetched profile.
@@ -62,6 +73,10 @@ func fetchSync(src string, full bool) syncData {
 			return d
 		}
 		d.History, _ = cfRatingHistory() // a chart, not worth failing the sync for
+		return d
+	}
+	if src == "ac" {
+		d.Rating, d.History, d.Err = acHistory()
 		return d
 	}
 	d.Rating, d.History, d.LCRecent, d.Err = lcProfile()
@@ -100,6 +115,8 @@ func (s *State) applySync(d syncData) {
 	for _, a := range d.LCRecent {
 		s.Seen["lc:"+a.Slug] = true
 	}
+	s.virtuals(d.CFSubs)
+	s.rateRounds()
 }
 
 // setRating takes a new live rating. The adaptive offset exists to cover the
@@ -122,8 +139,25 @@ func (s *State) setRating(src string, r int) {
 	}
 }
 
+// applyCal takes a judge's calendar, with the same backoff as a sync.
+func (s *State) applyCal(c calendar) {
+	l := s.leg("cal-" + c.Judge)
+	l.Try = now()
+	if c.Err != nil {
+		l.Fails++
+		log.Printf("calendar %s: %v (retry in %s)", c.Judge, c.Err, backoff(l.Fails))
+		if now().Sub(l.OK) > 24*time.Hour {
+			s.trouble("cal-"+c.Judge, fmt.Sprintf("can't read %s's contest calendar: %v", srcName(c.Judge), c.Err))
+		}
+		return
+	}
+	l.OK, l.Fails = now(), 0
+	s.fixed("cal-" + c.Judge)
+	s.applyCalendar(c.Judge, c.Rounds)
+}
+
 func srcName(src string) string {
-	return map[string]string{"cf": "Codeforces", "lc": "LeetCode"}[src]
+	return map[string]string{"cf": "Codeforces", "lc": "LeetCode", "ac": "AtCoder"}[src]
 }
 
 // catalog is the problem lists a pick needs, loaded outside the lock.
@@ -167,17 +201,31 @@ type judged struct {
 	Err    error
 	CF     []cfSub
 	LC     []lcSub
+	AC     []acSub
 	Polled time.Time
 }
 
 func fetchJudge(t *Task) *judged {
 	j := &judged{ID: t.ID, Polled: now()}
-	if t.Source() == "cf" {
+	switch t.Source() {
+	case "cf":
 		j.CF, j.Err = cfSubs(20)
-	} else {
+	case "ac":
+		j.AC, j.Err = acSubs(t.Assigned.Add(-time.Minute))
+	default:
 		j.LC, j.Err = lcSubs()
 	}
 	return j
+}
+
+// syncSources is every profile edge syncs: the problem sources, and
+// AtCoder when its rounds are followed.
+func syncSources() []string {
+	srcs := []string{"cf", "lc"}
+	if c := cfg(); c.Rounds && slices.Contains(c.RoundJudges, "ac") && c.ACUser != "" {
+		srcs = append(srcs, "ac")
+	}
+	return srcs
 }
 
 // gathered is everything one tick fetched before taking the lock.
@@ -186,14 +234,34 @@ type gathered struct {
 	cat    *catalog
 	judge  *judged
 	gateOK *bool // nil: not checked this tick
+	cals   []calendar
+	obs    []roundObs
+}
+
+// calendar is one judge's fetched contest list.
+type calendar struct {
+	Judge  string
+	Rounds []calRound
+	Err    error
 }
 
 // gather does the tick's network I/O, deciding from a lock-free snapshot.
 func gather(snap *State) gathered {
 	var g gathered
-	for _, src := range []string{"cf", "lc"} {
+	for _, src := range syncSources() {
 		if snap.syncDue(src) {
 			g.syncs = append(g.syncs, fetchSync(src, src == "cf" && now().Sub(snap.leg("cf").Full) >= fullEvery))
+		}
+	}
+	if cfg().Rounds {
+		for _, j := range cfg().RoundJudges {
+			if snap.syncDue("cal-" + j) {
+				cal, err := fetchCalendar(j)
+				g.cals = append(g.cals, calendar{Judge: j, Rounds: cal, Err: err})
+			}
+		}
+		for _, r := range snap.observeDue() {
+			g.obs = append(g.obs, observe(r, now()))
 		}
 	}
 	if snap.wantsAssign() {

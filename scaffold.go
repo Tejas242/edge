@@ -11,10 +11,13 @@ import (
 // files are created by competitest when Competitive Companion sends the
 // problem (with its samples); LeetCode files are created here.
 func solutionPath(t *Task) string {
-	if t.Source() == "cf" {
+	switch t.Source() {
+	case "cf":
 		id := strings.TrimPrefix(t.ID, "cf:")
 		c := contestOf(t.ID)
 		return filepath.Join(workDir(), "codeforces", c, id[len(c):]+".cpp")
+	case "ac": // competitest: atcoder/abc480/D.cpp
+		return filepath.Join(workDir(), "atcoder", acContest(t.ID), indexOf(t.ID)+".cpp")
 	}
 	return filepath.Join(workDir(), "leetcode", strings.TrimPrefix(t.ID, "lc:")+".cpp")
 }
@@ -79,6 +82,15 @@ func lcStarter(slug string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no C++ starter for %s", slug)
+}
+
+// acContest is an AtCoder task's contest: "ac:abc480_d" → "abc480".
+func acContest(id string) string {
+	s := strings.TrimPrefix(id, "ac:")
+	if i := strings.LastIndexByte(s, '_'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func exists(p string) bool {

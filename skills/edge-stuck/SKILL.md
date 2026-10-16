@@ -16,6 +16,6 @@ Run `edge stuck`. It only looks: it prints the problem, sometimes the statement,
 
 Before hinting:
 - If you don't know what they've tried, ask in one line first, then fit the hint to their attempt.
-- For Codeforces problems the statement isn't fetched. If you're not certain you know this exact problem from its ID and title, ask them to paste the statement. Never hint from a guess.
+- For Codeforces and AtCoder problems the statement isn't fetched. If you're not certain you know this exact problem from its ID and title, ask them to paste the statement. Never hint from a guess.
 
 Rules: the user writes C++. Never write solution code. Keep the hint short.

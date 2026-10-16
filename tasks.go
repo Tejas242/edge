@@ -30,6 +30,12 @@ func assign(s *State, cat *catalog) (*Task, error) {
 		}
 		fallthrough
 	default:
+		// an upsolve while the round is fresh, before re-solves and new problems
+		if r, p := s.nextUpsolve(); p != nil {
+			*t = Task{ID: p.ID, Kind: "upsolve", Title: p.Title, URL: p.URL, Rating: p.Rating, Policy: "ladder",
+				Round: r.ID, RoundName: r.Short() + " " + p.Index}
+			break
+		}
 		if i := s.dueProbe(); i >= 0 {
 			p := s.Probes[i]
 			*t = Task{ID: p.Problem, Kind: "resolve", Title: p.Title, URL: p.URL, Rating: p.Rating,
@@ -45,7 +51,9 @@ func assign(s *State, cat *catalog) (*Task, error) {
 	s.fixed("assign")
 	t.Assigned, t.Explain = now(), -1
 	s.Current = t
-	archive(t) // the old attempt goes before they can open it
+	if t.Kind != "upsolve" {
+		archive(t) // the old attempt goes before they can open it; an upsolve picks up the round's
+	}
 	return t, nil
 }
 
@@ -103,11 +111,14 @@ func begin(s *State, t *Task, at time.Time) {
 
 func describe(s *State, t *Task) string {
 	var b strings.Builder
-	label := map[string]string{"new": "NEW", "resolve": "COLD RE-SOLVE", "reentry": "WARM-UP (welcome back)"}[t.Kind]
+	label := map[string]string{"new": "NEW", "resolve": "COLD RE-SOLVE", "reentry": "WARM-UP (welcome back)", "upsolve": "UPSOLVE " + t.RoundName}[t.Kind]
 	fmt.Fprintf(&b, "%s  %s\n  %s\n  rating %d", label, t.Title, t.URL, t.Rating)
-	if t.Kind == "new" {
+	switch t.Kind {
+	case "new":
 		b.WriteString(" · topic revealed after you solve it\n")
-	} else {
+	case "upsolve":
+		b.WriteString(" · from the round; hints unlock as you work\n")
+	default:
 		b.WriteString(" · no hints, from scratch, no peeking at your old code\n")
 	}
 	if t.Active() {
@@ -179,6 +190,13 @@ func verifyAC(t *Task) (bool, error) {
 		}
 		return false, nil
 	}
+	if t.Source() == "ac" {
+		subs, err := acSubs(t.Assigned.Add(-time.Minute))
+		if err != nil {
+			return false, err
+		}
+		return slices.ContainsFunc(subs, func(x acSub) bool { return "ac:"+x.Problem == t.ID && x.Result == "AC" }), nil
+	}
 	subs, err := lcSubs()
 	if err != nil {
 		return false, err
@@ -240,6 +258,8 @@ func giveup(s *State, statement string) error {
 	revealWhy(t)
 	if t.Source() == "cf" {
 		fmt.Fprintf(out, "editorial: the contest's Tutorial link at https://codeforces.com/contest/%s\n", contestOf(t.ID))
+	} else if t.Source() == "ac" {
+		fmt.Fprintf(out, "editorial: https://atcoder.jp/contests/%s/editorial\n", acContest(t.ID))
 	} else if statement != "" {
 		fmt.Fprintf(out, "statement:\n%s\n", statement)
 	}
@@ -283,7 +303,7 @@ func skip(s *State, seen bool, cat *catalog) error {
 	if t == nil {
 		return fmt.Errorf("no current task")
 	}
-	if t.Kind != "new" {
+	if t.Kind != "new" && t.Kind != "upsolve" {
 		return fmt.Errorf("re-solves can't be skipped; `edge giveup` reschedules it")
 	}
 	if seen {
@@ -292,6 +312,9 @@ func skip(s *State, seen bool, cat *catalog) error {
 	t.Outcome = "skipped"
 	t.Finished = now()
 	s.History = append(s.History, *t)
+	if t.Kind == "upsolve" {
+		s.upsolveDone(t)
+	}
 	s.Current = nil
 	if _, err := assign(s, cat); err != nil {
 		fmt.Fprintln(out, "skipped; no next problem yet:", err)
@@ -334,6 +357,9 @@ func finish(s *State, t *Task, at time.Time) {
 			probe(c.FirstResolve, 1, 0)
 		}
 		s.adapt(t.Source())
+	case "upsolve":
+		s.upsolveDone(t)
+		probe(c.FirstResolve, 1, 0) // a contest problem sticks or it doesn't, like any other
 	case "resolve":
 		switch {
 		case t.Outcome != "solo" && t.ProbeTry+1 >= maxTries:

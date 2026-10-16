@@ -9,4 +9,4 @@ The edge daemon usually hands out problems itself, through desktop notifications
 - **Already solved it before:** run `edge skip --seen`, then `edge start`.
 - **Wants a different one for any other reason:** run `edge skip`, then `edge start`. Say that skipping earns no credit.
 
-Never mention the problem's topic, tags or likely technique; edge hides them on purpose. If it's a re-solve, say: from scratch, no hints.
+Never mention the problem's topic, tags or likely technique; edge hides them on purpose. If it's a re-solve, say: from scratch, no hints. If it's an upsolve, name the round it's from: hints unlock as they work, like a new problem. Skipping an upsolve drops it for good.

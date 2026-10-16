@@ -16,7 +16,7 @@ import (
 // re-read when it changes. Gate rules that would make today easier only take
 // effect tomorrow (see State.rules), so the file isn't a way around the gate.
 type Config struct {
-	CFUser, LCUser string // [accounts]
+	CFUser, LCUser, ACUser string // [accounts]
 
 	WeekdayFrom, WeekendFrom time.Duration // [schedule] when work is offered, from midnight
 	DayEnds                  time.Duration // [schedule] work before this counts for the day before
@@ -43,12 +43,19 @@ type Config struct {
 	OfferEvery  time.Duration  // [notify] offer_every_min
 
 	Terminal, Editor, Browser string // [launch]
+
+	Rounds      bool     // [contests] enabled
+	RoundJudges []string // [contests] judges: cf, ac, lc
+	PerWeek     int      // [contests] per_week: rounds you're held to each week
+	RoundLock   bool     // [contests] lock: no Claude at all during a live round you're in
+	UpsolveN    int      // [contests] upsolve: problems past your last solve that become upsolves
+	UpsolveDays int      // [contests] upsolve_days: an upsolve not done by then lapses
 }
 
 func defaultConfig() *Config {
 	h, _ := os.UserHomeDir()
 	return &Config{
-		CFUser: "screenager", LCUser: "screenager",
+		CFUser: "screenager", LCUser: "screenager", ACUser: "screenager",
 		WeekdayFrom: 19 * time.Hour, WeekendFrom: 10 * time.Hour, DayEnds: 4 * time.Hour,
 		WeekdayMin: 1, WeekendMin: 3, Weekly: 12, HonestTry: 45 * time.Minute,
 		Gate: true, Workspace: filepath.Join(h, "CP"),
@@ -69,6 +76,7 @@ func defaultConfig() *Config {
 			"twitch", "hotstar", "prime video", "facebook", "9gag"}),
 		DriftAfter: 2 * time.Minute, OfferEvery: 30 * time.Minute,
 		Terminal: "alacritty", Editor: "nvim", Browser: "xdg-open",
+		Rounds: true, RoundJudges: []string{"cf", "ac", "lc"}, PerWeek: 2, RoundLock: true, UpsolveN: 2, UpsolveDays: 7,
 	}
 }
 
@@ -89,6 +97,7 @@ const defaultConfigText = `# edge: changes apply within a minute, no restart nee
 [accounts]
 codeforces = "screenager"
 leetcode   = "screenager"
+atcoder    = "screenager"
 
 [schedule]
 weekday_from = "19:00"  # when problems are offered and the gate closes, Mon-Fri
@@ -159,6 +168,17 @@ offer_every_min = 30  # how often an unstarted problem is offered again
 terminal = "alacritty"  # must take --title, --working-directory and -e
 editor   = "nvim"
 browser  = "xdg-open"
+
+# Rounds: live contests. edge follows the calendars, holds you to a few
+# rounds a week, locks Claude while you're in one, and turns the problems
+# just past your last solve into upsolves. A missed round still owes them.
+[contests]
+enabled      = true
+judges       = ["cf", "ac", "lc"]  # Codeforces Div. 2/3/4, Edu and Div. 1+2; AtCoder ABC; LeetCode weekly and biweekly
+per_week     = 2     # rounds you're held to each week, at most one a day, in study time
+lock         = true  # no Claude at all while you're in a live round (rounds ban AI anyway)
+upsolve      = 2     # problems past your last solve that become upsolves, one after another
+upsolve_days = 7     # an upsolve not done by then lapses
 `
 
 var (
@@ -260,6 +280,8 @@ func parseConfig(path string) (*Config, []string) {
 			c.CFUser = str
 		case "accounts.leetcode":
 			c.LCUser = str
+		case "accounts.atcoder":
+			c.ACUser = str
 		case "schedule.weekday_from":
 			clock(func(d time.Duration) { c.WeekdayFrom = d })
 		case "schedule.weekend_from":
@@ -355,6 +377,36 @@ func parseConfig(path string) (*Config, []string) {
 			c.Editor = str
 		case "launch.browser":
 			c.Browser = str
+		case "contests.enabled":
+			if b, err := strconv.ParseBool(str); err == nil {
+				c.Rounds = b
+			} else {
+				fail()
+			}
+		case "contests.judges":
+			var js []string
+			for _, x := range list(v) {
+				if x == "cf" || x == "ac" || x == "lc" {
+					js = append(js, x)
+				}
+			}
+			if len(js) == 0 && v != "[]" {
+				fail()
+				continue
+			}
+			c.RoundJudges = js
+		case "contests.per_week":
+			num(0, 7, func(x int) { c.PerWeek = x })
+		case "contests.lock":
+			if b, err := strconv.ParseBool(str); err == nil {
+				c.RoundLock = b
+			} else {
+				fail()
+			}
+		case "contests.upsolve":
+			num(0, 5, func(x int) { c.UpsolveN = x })
+		case "contests.upsolve_days":
+			num(1, 30, func(x int) { c.UpsolveDays = x })
 		default:
 			bad = append(bad, fmt.Sprintf("line %d: unknown key %s.%s", n, section, k))
 		}
@@ -418,10 +470,11 @@ type Rules struct {
 	WeekendMin int       `json:"weekend_min"`
 	Gate       bool      `json:"gate"`
 	Workspace  string    `json:"workspace"`
+	RoundLock  bool      `json:"round_lock"`
 }
 
 func (c *Config) rules(d time.Time) Rules {
-	return Rules{Day: d, WeekdayMin: c.WeekdayMin, WeekendMin: c.WeekendMin, Gate: c.Gate, Workspace: c.Workspace}
+	return Rules{Day: d, WeekdayMin: c.WeekdayMin, WeekendMin: c.WeekendMin, Gate: c.Gate, Workspace: c.Workspace, RoundLock: c.Rounds && c.RoundLock}
 }
 
 // rules are today's effective gate terms: the config, held to what was pinned today.
@@ -433,6 +486,7 @@ func (s *State) rules() Rules {
 	}
 	r.WeekdayMin, r.WeekendMin = max(r.WeekdayMin, p.WeekdayMin), max(r.WeekendMin, p.WeekendMin)
 	r.Gate = r.Gate || p.Gate
+	r.RoundLock = r.RoundLock || p.RoundLock
 	if p.Workspace != r.Workspace {
 		r.Workspace = p.Workspace // a different practice dir starts tomorrow
 	}

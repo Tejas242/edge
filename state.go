@@ -15,8 +15,8 @@ import (
 var now = time.Now
 
 type Task struct {
-	ID         string    `json:"id"`   // "cf:1899A" or "lc:sum-game"
-	Kind       string    `json:"kind"` // new | resolve | reentry
+	ID         string    `json:"id"`   // "cf:1899A", "lc:sum-game" or "ac:abc480_d"
+	Kind       string    `json:"kind"` // new | resolve | reentry | upsolve
 	Title      string    `json:"title"`
 	URL        string    `json:"url"`
 	Rating     int       `json:"rating"`
@@ -33,13 +33,15 @@ type Task struct {
 	Explain    int       `json:"explain"` // explain-back score 0..2, -1 = not done
 	ProbeOf    string    `json:"probe_of,omitempty"`
 	ProbeStage int       `json:"probe_stage,omitempty"`
-	ProbeTry   int       `json:"probe_try,omitempty"` // 0 = first attempt at this stage
-	Fails      int       `json:"fails"`               // rejected submissions seen
-	WorkSec    int       `json:"work_sec"`            // seconds of real work seen (problem, editor or terminal in focus)
-	DriftSec   int       `json:"drift_sec"`           // seconds on distractions while active
-	Edited     bool      `json:"edited,omitempty"`    // the solution file changed after starting
-	Offers     int       `json:"offers,omitempty"`    // times offered without being started
-	SubSeen    int64     `json:"sub_seen"`            // newest submission time already processed
+	ProbeTry   int       `json:"probe_try,omitempty"`  // 0 = first attempt at this stage
+	Fails      int       `json:"fails"`                // rejected submissions seen
+	WorkSec    int       `json:"work_sec"`             // seconds of real work seen (problem, editor or terminal in focus)
+	DriftSec   int       `json:"drift_sec"`            // seconds on distractions while active
+	Edited     bool      `json:"edited,omitempty"`     // the solution file changed after starting
+	Offers     int       `json:"offers,omitempty"`     // times offered without being started
+	SubSeen    int64     `json:"sub_seen"`             // newest submission time already processed
+	Round      string    `json:"round,omitempty"`      // upsolves: the round it's from
+	RoundName  string    `json:"round_name,omitempty"` // and its short name
 }
 
 func (t *Task) Source() string {
@@ -72,6 +74,7 @@ type RatingPoint struct {
 	At      time.Time `json:"at"`
 	Rating  int       `json:"rating"`
 	Contest string    `json:"contest"`
+	Round   string    `json:"round,omitempty"` // the round's id: cf:2261, ac:abc480, lc:weekly-contest-524
 }
 
 // syncLeg tracks one source's background sync, with backoff on failure.
@@ -110,6 +113,7 @@ type State struct {
 	Said      map[string]time.Time     `json:"said"`     // notifications already sent, by key
 	DriftAt   time.Time                `json:"drift_at"` // when the current distraction started
 	Trouble   map[string]Trouble       `json:"trouble,omitempty"`
+	Rounds    []Round                  `json:"rounds,omitempty"` // live contests followed, oldest first
 }
 
 // trouble records a problem, keeping the time it started.

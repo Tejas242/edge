@@ -137,9 +137,12 @@ func cfDecode(b []byte, out any) error {
 
 type cfSub struct {
 	Problem cfProblem `json:"problem"`
-	Verdict string    `json:"verdict"`
-	Passed  int       `json:"passedTestCount"`
-	Time    int64     `json:"creationTimeSeconds"`
+	Author  struct {
+		Type string `json:"participantType"` // CONTESTANT | OUT_OF_COMPETITION | VIRTUAL | PRACTICE
+	} `json:"author"`
+	Verdict string `json:"verdict"`
+	Passed  int    `json:"passedTestCount"`
+	Time    int64  `json:"creationTimeSeconds"`
 }
 
 func cfSubs(count int) ([]cfSub, error) {
@@ -239,20 +242,21 @@ func lcProfile() (rating int, history []RatingPoint, recent []lcAC, err error) {
 			Rating   float64 `json:"rating"`
 			Contest  struct {
 				Title     string `json:"title"`
+				Slug      string `json:"titleSlug"`
 				StartTime int64  `json:"startTime"`
 			} `json:"contest"`
 		} `json:"userContestRankingHistory"`
 		Recent []lcAC `json:"recentAcSubmissionList"`
 	}
 	err = lcQuery(`query($u:String!){userContestRanking(username:$u){rating}
-		userContestRankingHistory(username:$u){attended rating contest{title startTime}}
+		userContestRankingHistory(username:$u){attended rating contest{title titleSlug startTime}}
 		recentAcSubmissionList(username:$u,limit:20){titleSlug timestamp}}`, map[string]any{"u": cfg().LCUser}, &r)
 	if r.Rank != nil {
 		rating = int(r.Rank.Rating)
 	}
 	for _, h := range r.History {
 		if h.Attended {
-			history = append(history, RatingPoint{At: time.Unix(h.Contest.StartTime, 0), Rating: int(h.Rating), Contest: h.Contest.Title})
+			history = append(history, RatingPoint{At: time.Unix(h.Contest.StartTime, 0), Rating: int(h.Rating), Contest: h.Contest.Title, Round: "lc:" + h.Contest.Slug})
 		}
 	}
 	return rating, history, r.Recent, err
@@ -261,6 +265,7 @@ func lcProfile() (rating int, history []RatingPoint, recent []lcAC, err error) {
 // cfRatingHistory is every rated contest's result.
 func cfRatingHistory() ([]RatingPoint, error) {
 	var rs []struct {
+		ID      int    `json:"contestId"`
 		Contest string `json:"contestName"`
 		Rating  int    `json:"newRating"`
 		At      int64  `json:"ratingUpdateTimeSeconds"`
@@ -270,7 +275,7 @@ func cfRatingHistory() ([]RatingPoint, error) {
 	}
 	out := make([]RatingPoint, 0, len(rs))
 	for _, r := range rs {
-		out = append(out, RatingPoint{At: time.Unix(r.At, 0), Rating: r.Rating, Contest: r.Contest})
+		out = append(out, RatingPoint{At: time.Unix(r.At, 0), Rating: r.Rating, Contest: r.Contest, Round: fmt.Sprintf("cf:%d", r.ID)})
 	}
 	return out, nil
 }

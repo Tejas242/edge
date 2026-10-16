@@ -63,6 +63,11 @@ func main() {
 		}
 		check(enc.Encode(s.stats()))
 		return
+	case "rounds":
+		s, err := load()
+		check(err)
+		fmt.Print(roundsReport(s))
+		return
 	case "config":
 		if len(args) == 1 && args[0] == "init" {
 			check(writeDefaultConfig())
@@ -100,7 +105,9 @@ func main() {
 			verified = ok
 		}
 	case "sync":
-		syncs = []syncData{fetchSync("cf", true), fetchSync("lc", false)}
+		for _, src := range syncSources() {
+			syncs = append(syncs, fetchSync(src, src == "cf"))
+		}
 	case "pass":
 		check(passAllowed())
 	}
@@ -119,6 +126,9 @@ func main() {
 				}
 			}
 			fmt.Fprintf(out, "synced: cf %d, lc %d, %d problems already solved on CF\n", s.Ratings["cf"], s.Ratings["lc"], len(s.CFDone))
+			if r := s.Ratings["ac"]; r > 0 {
+				fmt.Fprintf(out, "atcoder %d\n", r)
+			}
 		case "next", "start":
 			if s.Current == nil {
 				if cat == nil {
@@ -169,6 +179,14 @@ func main() {
 			return explain(s, n)
 		case "pass":
 			return pass(s)
+		case "round":
+			if len(args) >= 2 && args[0] == "lesson" {
+				return setLesson(s, strings.Join(args[1:], " "))
+			}
+			if len(args) != 0 {
+				usage()
+			}
+			return roundInfo(s)
 		default:
 			usage()
 		}
@@ -183,7 +201,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: edge daemon|hook|action <key>|install|status|stats [--compact]|config [init]|next|start|stuck [--take N]|done|giveup|skip [--seen]|explain [0-2]|report|pass|sync")
+	fmt.Fprintln(os.Stderr, "usage: edge daemon|hook|action <key>|install|status|stats [--compact]|config [init]|next|start|stuck [--take N]|done|giveup|skip [--seen]|explain [0-2]|rounds|round [lesson <text>]|report|pass|sync")
 	os.Exit(2)
 }
 
@@ -261,6 +279,14 @@ func status(s *State) string {
 		}
 	}
 	fmt.Fprintf(&b, "re-solves: %d due, %d scheduled\n", due, len(s.Probes))
+	if r := s.liveHeld(); r != nil {
+		fmt.Fprintf(&b, "ROUND LIVE: %s, %s left · solved %s\n", r.Name, r.clock(now()), orNone(r.letters("solved")))
+	} else if r := s.nextHeld(); r != nil {
+		fmt.Fprintf(&b, "next round: %s, %s (you're in)\n", r.Name, clockDay(r.Start))
+	}
+	if r, p := s.nextUpsolve(); p != nil {
+		fmt.Fprintf(&b, "upsolve next: %s %s %s, by %s\n", r.Short(), p.Index, p.Title, p.Due.Add(-time.Minute).Format("Mon"))
+	}
 	b.WriteString(gateLine(s))
 	if t := mtime(daemonSeenPath()); t.IsZero() || time.Since(t) > 2*time.Minute {
 		b.WriteString("DAEMON IS NOT RUNNING: nothing is offered or tracked. `systemctl --user start edge`\n")
@@ -294,6 +320,8 @@ func gateLine(s *State) string {
 		return "gate: open, pass used today" + seen + "\n"
 	case s.failOpen() != "":
 		return "gate: open because edge can't offer work: " + s.failOpen() + seen + "\n"
+	case s.roundToday() != nil:
+		return "gate: open until today's round, " + s.roundToday().Short() + " at " + s.roundToday().Start.Format("15:04") + seen + "\n"
 	default:
 		return "gate: open outside study time" + seen + "\n"
 	}

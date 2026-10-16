@@ -2,7 +2,8 @@
 
 One JSON document with everything a dashboard needs: today, the current
 problem, streaks, a year of daily activity, ratings over time, topics,
-difficulty, re-solves, the hint experiment and edge's own health. Build any
+difficulty, re-solves, the hint experiment, contest rounds and edge's own
+health. Build any
 view on it: an Ember page, a Noctalia widget, a waybar module, a web page.
 
 ## Getting it
@@ -40,7 +41,7 @@ offset. Dates (`"2026-10-15"`) are **edge days**, which end at `day_ends`
     "study_time": true,                       // problems are offered (and the gate can close) now
     "study_from": "19:00", "day_ends": "04:00",
     "gate": "closed",                         // closed | open | off
-    "gate_why": "",                           // when open: done | pass | outside_study_time | not_enforcing | edge_trouble; "disabled" when off
+    "gate_why": "",                           // when open: done | pass | outside_study_time | not_enforcing | edge_trouble | round_today; "disabled" when off
     "pass_used_this_week": false
   },
 
@@ -117,8 +118,42 @@ offset. Dates (`"2026-10-15"`) are **edge days**, which end at `day_ends`
   ],
 
   "health": [ { "key": "cf", "since": "…", "msg": "can't reach Codeforces …" } ],
-  "daemon": { "alive": true, "seen": "…", "gate_hook_seen": "…" }
+  "daemon": { "alive": true, "seen": "…", "gate_hook_seen": "…" },
+
+  "rounds": {                                 // live contests (added within version 1)
+    "enabled": true, "per_week": 2,           // rounds held to each week
+    "lock": true,                             // Claude is off during a live round they're in
+    "live": round,                            // on now and held or joined; null otherwise
+    "next": round,                            // the next one they're held to; null if none
+    "upcoming": [ round ],                    // the next 8 days, soonest first, open ones too
+    "recent": [ round ],                      // finished rounds sat or held, newest first, up to 12
+    "upsolves": { "open": 2, "done": 5, "taught": 1, "lapsed": 1,
+                  "queue": [ { "id": "cf:2261D", "title": "…", "url": "…", "round": "cf:2261",
+                               "short": "CF 1128", "index": "D", "rating": 1600, "due": "…" } ] },  // first is offered next
+    "streak_weeks": { "current": 3, "best": 5 },   // weeks in a row with a round sat
+    "record": { "held": 8, "sat": 6, "missed": 2,  // rounds held to, and how that went
+                "extra": 1 }                        // open rounds sat anyway
+  }
 }
+```
+
+A `round`:
+
+```jsonc
+{ "id": "cf:2261", "judge": "cf",             // cf | ac | lc
+  "name": "Codeforces Round 1128 (Div. 1 + Div. 2)", "short": "CF 1128",
+  "kind": "div12",                            // div2 div3 div4 edu div12 | abc | weekly biweekly
+  "url": "https://codeforces.com/contest/2261", "start": "…", "end": "…",
+  "plan": "in",                               // in: held to it | out: can't make it | open
+  "joined": "live",                           // live | virtual | missing: didn't sit it
+  "state": "over",                            // upcoming | live | settling | over
+  "solved": 3, "credit": 3,                   // a round sat meets its day: max(2, solved, the day's quota)
+  "rated": true, "rating": 1251, "delta": 43, // once the judge publishes it
+  "lesson": "reread the constraints before coding",
+  "problems": [ { "id": "cf:2261C", "index": "C", "title": "…", "url": "…", "rating": 1400,
+                  "state": "solved",          // "" | tried | solved | upsolve | upsolved | taught | dropped | lapsed
+                  "at_sec": 2460, "fails": 1, // when it was solved, rejections in the round
+                  "due": "…" } ] }            // upsolves: when it lapses
 ```
 
 ## Ideas for views
@@ -132,6 +167,9 @@ offset. Dates (`"2026-10-15"`) are **edge days**, which end at `day_ends`
   tasks, so thin, hard topics stand out.
 - **Re-solve queue:** `resolves.upcoming`. The retention gauge is
   `first_retained / first_attempts`.
+- **Round strip:** `rounds.live` as a countdown with a dot per problem, or
+  `rounds.next` as "Sat 20:05 · CF 1128 · you're in"; `rounds.recent` as rows of
+  letters coloured by state.
 
 A one-liner for a status bar:
 

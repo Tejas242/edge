@@ -68,6 +68,11 @@ func (s *State) creditsSince(from time.Time) int {
 			n += credit(t)
 		}
 	}
+	for i := range s.Rounds {
+		if r := &s.Rounds[i]; r.Joined != "" && !r.creditAt().Before(from) {
+			n += s.roundCredit(r)
+		}
+	}
 	return n
 }
 
@@ -82,6 +87,11 @@ func (s *State) streak() int {
 	for _, t := range s.History {
 		if c := credit(t); c > 0 {
 			byDay[day(t.Finished)] += c
+		}
+	}
+	for i := range s.Rounds {
+		if r := &s.Rounds[i]; r.Joined != "" {
+			byDay[day(r.creditAt())] += s.roundCredit(r)
 		}
 	}
 	// d is a day's start; d+12h is safely inside it (day() of the start
@@ -153,7 +163,7 @@ func (s *State) closed() bool {
 		return false
 	}
 	got, need := s.today()
-	return got < need && !s.passOn(now()) && s.failOpen() == ""
+	return got < need && !s.passOn(now()) && s.failOpen() == "" && s.roundToday() == nil
 }
 
 // failOpen says why the gate must open even though the work isn't done:
@@ -196,6 +206,9 @@ func realPath(p string) string {
 // contract that keeps Claude on practice. gateTool enforces the same thing
 // on tool calls.
 func gateDecide(s *State, prompt, cwd string) verdict {
+	if r := s.roundLock(); r != nil {
+		return verdict{Block: true, Reason: lockReason(r)} // no exceptions: not the workspace, not edge's skills
+	}
 	p := strings.TrimSpace(prompt)
 	ws := s.practiceDir()
 	inWS := cwd != "" && under(cwd, ws)
@@ -254,6 +267,9 @@ var (
 // workspace. It's a speed bump, not a sandbox (a compiled program can read
 // anything); the prompt contract and honest credit do the real work.
 func gateTool(s *State, tool string, input map[string]any, cwd string) (deny bool, reason string) {
+	if r := s.roundLock(); r != nil {
+		return true, lockReason(r) + " Stop here and tell the user; don't retry."
+	}
 	if !s.closed() {
 		return false, ""
 	}
@@ -349,9 +365,13 @@ func tutorContract(s *State) string {
 		"Never write the solution or reveal the key idea for their current problem except through the edge-stuck / edge-giveup skills. " +
 		"Map plain talk to skills: stuck/hint/help → edge-stuck; got AC/accepted/solved → edge-done; give up/show solution → edge-giveup; " +
 		"already solved this / different problem → edge-next (skip); progress/streak → edge-status. " +
-		"General concepts, C++ syntax, STL and compiler errors are fine to explain. Never run `edge pass`: only the user can, in a terminal."
+		"General concepts, C++ syntax, STL and compiler errors are fine to explain. Never run `edge pass` or `edge action`: only the user can. " +
+		"After a contest round: debrief → edge-round."
 	if t := s.Current; t != nil {
 		c += fmt.Sprintf(" Current problem: %s %s (%d hints used, %d rejected).", t.Title, t.URL, t.Hints, t.Fails)
+		if t.Kind == "upsolve" {
+			c += " It's an upsolve from " + t.RoundName + ": hints follow the ladder like a new problem."
+		}
 	}
 	if t := s.lastSolved(); t != nil {
 		c += fmt.Sprintf(" %s was accepted and still needs its explain-back (edge-done).", t.Title)

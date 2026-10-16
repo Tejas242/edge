@@ -11,4 +11,4 @@ Run `edge giveup`.
   2. Why it's correct.
   3. A clean C++ solution with brief comments.
   4. The general pattern, for recognising it next time.
-- **For Codeforces:** if you're not certain of the exact problem, ask them to paste the statement first.
+- **For Codeforces and AtCoder:** if you're not certain of the exact problem, ask them to paste the statement first.

@@ -37,6 +37,81 @@ type Stats struct {
 	Recent     []StatsTask            `json:"recent"`
 	Health     []StatsTrouble         `json:"health"`
 	Daemon     StatsDaemon            `json:"daemon"`
+	Rounds     StatsRounds            `json:"rounds"`
+}
+
+// StatsRounds is live contests: the plan, the one on now, how they went
+// and what's owed.
+type StatsRounds struct {
+	Enabled  bool          `json:"enabled"`
+	PerWeek  int           `json:"per_week"`
+	Lock     bool          `json:"lock"`
+	Live     *StatsRound   `json:"live"`     // on now and held (or joined); null otherwise
+	Next     *StatsRound   `json:"next"`     // the next one they're held to; null if none
+	Upcoming []StatsRound  `json:"upcoming"` // the next 8 days, soonest first, open ones too
+	Recent   []StatsRound  `json:"recent"`   // finished rounds sat or held, newest first
+	Upsolves StatsUpsolves `json:"upsolves"`
+	Weeks    StatsStreak   `json:"streak_weeks"` // weeks in a row with a round sat
+	Record   StatsRecord   `json:"record"`
+}
+
+type StatsRound struct {
+	ID       string              `json:"id"`
+	Judge    string              `json:"judge"` // cf | ac | lc
+	Name     string              `json:"name"`
+	Short    string              `json:"short"` // "CF 1128", "ABC 480", "Weekly 524"
+	Kind     string              `json:"kind"`  // div2 div3 div4 edu div12 abc weekly biweekly
+	URL      string              `json:"url"`
+	Start    time.Time           `json:"start"`
+	End      time.Time           `json:"end"`
+	Plan     string              `json:"plan"`             // in | out | open
+	Joined   string              `json:"joined,omitempty"` // live | virtual
+	State    string              `json:"state"`            // upcoming | live | settling | over
+	Solved   int                 `json:"solved"`
+	Credit   int                 `json:"credit"`
+	Rated    bool                `json:"rated,omitempty"`
+	Rating   int                 `json:"rating,omitempty"`
+	Delta    int                 `json:"delta,omitempty"`
+	Lesson   string              `json:"lesson,omitempty"`
+	Problems []StatsRoundProblem `json:"problems"`
+}
+
+type StatsRoundProblem struct {
+	ID     string    `json:"id"`
+	Index  string    `json:"index"`
+	Title  string    `json:"title"`
+	URL    string    `json:"url"`
+	Rating int       `json:"rating,omitempty"`
+	State  string    `json:"state"` // "" | tried | solved | upsolve | upsolved | taught | dropped | lapsed
+	AtSec  int       `json:"at_sec,omitempty"`
+	Fails  int       `json:"fails,omitempty"`
+	Due    time.Time `json:"due,omitzero"`
+}
+
+type StatsUpsolves struct {
+	Open   int            `json:"open"`
+	Done   int            `json:"done"`   // solved after the round
+	Taught int            `json:"taught"` // given up and taught
+	Lapsed int            `json:"lapsed"`
+	Queue  []StatsUpsolve `json:"queue"` // oldest round first; the first is offered next
+}
+
+type StatsUpsolve struct {
+	ID     string    `json:"id"`
+	Title  string    `json:"title"`
+	URL    string    `json:"url"`
+	Round  string    `json:"round"`
+	Short  string    `json:"short"`
+	Index  string    `json:"index"`
+	Rating int       `json:"rating,omitempty"`
+	Due    time.Time `json:"due"`
+}
+
+type StatsRecord struct {
+	Held   int `json:"held"`   // finished rounds they were held to
+	Sat    int `json:"sat"`    // of those, sat (live or virtually)
+	Missed int `json:"missed"` // held and not sat, or "can't make it"
+	Extra  int `json:"extra"`  // open rounds they sat anyway
 }
 
 type StatsToday struct {
@@ -223,6 +298,8 @@ func (s *State) stats() Stats {
 			st.Today.GateWhy = "pass"
 		case s.failOpen() != "":
 			st.Today.GateWhy = "edge_trouble"
+		case s.roundToday() != nil:
+			st.Today.GateWhy = "round_today"
 		default:
 			st.Today.GateWhy = "outside_study_time"
 		}
@@ -256,6 +333,19 @@ func (s *State) stats() Stats {
 		a.credits += credit(t)
 		a.work += t.WorkSec
 	}
+	for i := range s.Rounds {
+		if r := &s.Rounds[i]; r.Joined != "" {
+			a := at(day(r.creditAt()))
+			a.credits += s.roundCredit(r)
+			if r.Joined == "live" {
+				end := r.End()
+				if n.Before(end) {
+					end = n
+				}
+				a.work += int(max(0, end.Sub(r.Start)).Seconds()) // a round is focused work
+			}
+		}
+	}
 	if t := s.Current; t != nil && t.WorkSec > 0 {
 		at(today).work += t.WorkSec
 	}
@@ -284,11 +374,16 @@ func (s *State) stats() Stats {
 
 	// streaks: current is edge's rule; best scans every day since the first task
 	st.Streak.Current = s.streak()
-	if len(s.History) > 0 {
+	if len(s.History) > 0 || slices.ContainsFunc(s.Rounds, func(r Round) bool { return r.Joined != "" }) {
 		first := today
 		for _, t := range s.History {
 			if !t.Finished.IsZero() && day(t.Finished).Before(first) {
 				first = day(t.Finished)
+			}
+		}
+		for i := range s.Rounds {
+			if r := &s.Rounds[i]; r.Joined != "" && day(r.creditAt()).Before(first) {
+				first = day(r.creditAt())
 			}
 		}
 		run := 0
@@ -462,6 +557,8 @@ func (s *State) stats() Stats {
 	seen := mtime(daemonSeenPath())
 	st.Daemon = StatsDaemon{Alive: !seen.IsZero() && time.Since(seen) < 2*time.Minute, Seen: seen, Gate: gateSeen()}
 
+	st.Rounds = s.roundStats()
+
 	// empty lists are [] not null: easier for every consumer
 	for _, l := range []*[]StatsDay{&st.Calendar, &st.Week.Days} {
 		if *l == nil {
@@ -484,6 +581,115 @@ func (s *State) stats() Stats {
 		r.Upcoming = []StatsUpcoming{}
 	}
 	return st
+}
+
+func (s *State) roundStats() StatsRounds {
+	c, n := cfg(), now()
+	rs := StatsRounds{Enabled: c.Rounds, PerWeek: c.PerWeek, Lock: s.rules().RoundLock,
+		Upcoming: []StatsRound{}, Recent: []StatsRound{}, Upsolves: StatsUpsolves{Queue: []StatsUpsolve{}}}
+	export := func(r *Round) StatsRound {
+		x := StatsRound{ID: r.ID, Judge: r.Judge(), Name: r.Name, Short: r.Short(), Kind: r.Kind, URL: r.RoundURL(),
+			Start: r.Start, End: r.End(), Plan: r.Plan, Joined: r.Joined, Solved: r.solved(), Credit: s.roundCredit(r),
+			Rated: r.Rated, Rating: r.Rating, Delta: r.Delta, Lesson: r.Lesson, Problems: []StatsRoundProblem{}}
+		if x.Plan == "" {
+			x.Plan = "open"
+		}
+		switch {
+		case n.Before(r.Start):
+			x.State = "upcoming"
+		case r.Live(n):
+			x.State = "live"
+		case r.Settled.IsZero():
+			x.State = "settling"
+		default:
+			x.State = "over"
+		}
+		for _, p := range r.Problems {
+			x.Problems = append(x.Problems, StatsRoundProblem{ID: p.ID, Index: p.Index, Title: p.Title, URL: p.URL, Rating: p.Rating,
+				State: p.State, AtSec: p.At, Fails: p.Fails, Due: p.Due})
+		}
+		return x
+	}
+	if r := s.liveHeld(); r != nil {
+		x := export(r)
+		rs.Live = &x
+	}
+	if r := s.nextHeld(); r != nil && n.Before(r.Start) {
+		x := export(r)
+		rs.Next = &x
+	}
+	weeks := map[time.Time]bool{}
+	for i := range s.Rounds {
+		r := &s.Rounds[i]
+		if r.Gone {
+			continue
+		}
+		if n.Before(r.End()) && r.Start.Sub(n) <= planAhead {
+			rs.Upcoming = append(rs.Upcoming, export(r))
+		}
+		if r.Joined != "" {
+			weeks[weekStart(r.creditAt())] = true
+		}
+		if !r.Settled.IsZero() {
+			switch {
+			case r.Plan == "in" && r.Joined != "":
+				rs.Record.Held++
+				rs.Record.Sat++
+			case r.Plan != "" && r.Joined == "":
+				rs.Record.Held++
+				rs.Record.Missed++
+			case r.Joined != "":
+				rs.Record.Extra++
+			}
+		}
+		for _, p := range r.Problems {
+			switch p.State {
+			case "upsolve":
+				rs.Upsolves.Open++
+				rs.Upsolves.Queue = append(rs.Upsolves.Queue, StatsUpsolve{ID: p.ID, Title: p.Title, URL: p.URL, Round: r.ID,
+					Short: r.Short(), Index: p.Index, Rating: p.Rating, Due: p.Due})
+			case "upsolved":
+				rs.Upsolves.Done++
+			case "taught":
+				rs.Upsolves.Taught++
+			case "lapsed":
+				rs.Upsolves.Lapsed++
+			}
+		}
+	}
+	for i := len(s.Rounds) - 1; i >= 0 && len(rs.Recent) < 12; i-- {
+		if r := &s.Rounds[i]; !n.Before(r.End()) && !r.Gone && (r.Joined != "" || r.Plan != "") {
+			rs.Recent = append(rs.Recent, export(r))
+		}
+	}
+	// weeks in a row with a round sat; this week doesn't break it until it's over
+	w := weekStart(n)
+	if !weeks[w] {
+		w = w.AddDate(0, 0, -7)
+	}
+	for weeks[w] {
+		rs.Weeks.Current++
+		w = w.AddDate(0, 0, -7)
+	}
+	run := 0
+	if len(weeks) > 0 {
+		first := weekStart(n)
+		for k := range weeks {
+			if k.Before(first) {
+				first = k
+			}
+		}
+		for k := first; !k.After(weekStart(n)); k = k.AddDate(0, 0, 7) {
+			if weeks[k] {
+				run++
+			} else if !k.Equal(weekStart(n)) {
+				run = 0
+			}
+			rs.Weeks.Best = max(rs.Weeks.Best, run)
+		}
+	}
+	rs.Weeks.Best = max(rs.Weeks.Best, rs.Weeks.Current)
+	return rs
 }
 
 // attempted: the task was really worked on, so its topic is fair to show.

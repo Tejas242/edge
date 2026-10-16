@@ -161,7 +161,7 @@ func launchWork(t *Task) {
 	c := cfg()
 	spawn(workDir(), c.Browser, t.URL)
 	p := solutionPath(t)
-	dir := filepath.Join(workDir(), "codeforces")
+	dir := filepath.Join(workDir(), judgeDir(t.Source()))
 	args := []string{"--title", "edge · " + t.Title, "--working-directory", dir, "-e", c.Editor}
 	if t.Source() == "lc" {
 		dir = filepath.Dir(p)
@@ -170,6 +170,17 @@ func launchWork(t *Task) {
 		args = append(args, rel) // work in progress
 	}
 	spawn(dir, c.Terminal, args...)
+}
+
+// launchRound opens the round in the browser and nvim where competitest
+// puts a received contest (<judge dir>/<contest>/<letter>.cpp): one
+// Competitive Companion click on the round's page brings every problem.
+func launchRound(r *Round) {
+	c := cfg()
+	spawn(workDir(), c.Browser, r.RoundURL())
+	dir := filepath.Join(workDir(), judgeDir(r.Judge()))
+	os.MkdirAll(dir, 0o755)
+	spawn(dir, c.Terminal, "--title", "edge · "+r.Short(), "--working-directory", dir, "-e", c.Editor)
 }
 
 // launchClaude opens Claude in the workspace with the prompt already sent.
