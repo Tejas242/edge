@@ -139,6 +139,7 @@ var procCwds = func(pid int) []string {
 // there: restarting or updating edge must not take the user's editor or
 // Claude window with it. (The unit's KillMode=process is the second guard.)
 func spawn(dir, name string, args ...string) {
+	name = bin(name)
 	var cmd *exec.Cmd
 	if _, err := exec.LookPath("niri"); err == nil && os.Getenv("NIRI_SOCKET") != "" {
 		cmd = exec.Command("niri", append([]string{"msg", "action", "spawn", "--", name}, args...)...)
@@ -154,6 +155,18 @@ func spawn(dir, name string, args ...string) {
 	go cmd.Wait()
 }
 
+// bin turns a program name into its full path, found on edge's own PATH:
+// niri spawns with the session's PATH, which may lack ~/.local/bin (where
+// claude lives), and a terminal whose -e program is missing closes at once.
+func bin(name string) string {
+	if p, err := exec.LookPath(name); err == nil {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs
+		}
+	}
+	return name
+}
+
 // launchWork opens the problem in the browser and the editor where
 // competitest expects it: Competitive Companion's click then creates the
 // file with samples.
@@ -162,10 +175,10 @@ func launchWork(t *Task) {
 	spawn(workDir(), c.Browser, t.URL)
 	p := solutionPath(t)
 	dir := filepath.Join(workDir(), judgeDir(t.Source()))
-	args := []string{"--title", "edge · " + t.Title, "--working-directory", dir, "-e", c.Editor}
+	args := []string{"--title", "edge · " + t.Title, "--working-directory", dir, "-e", bin(c.Editor)}
 	if t.Source() == "lc" {
 		dir = filepath.Dir(p)
-		args = []string{"--title", "edge · " + t.Title, "--working-directory", dir, "-e", c.Editor, p}
+		args = []string{"--title", "edge · " + t.Title, "--working-directory", dir, "-e", bin(c.Editor), p}
 	} else if rel, err := filepath.Rel(dir, p); err == nil && exists(p) {
 		args = append(args, rel) // work in progress
 	}
@@ -180,10 +193,10 @@ func launchRound(r *Round) {
 	spawn(workDir(), c.Browser, r.RoundURL())
 	dir := filepath.Join(workDir(), judgeDir(r.Judge()))
 	os.MkdirAll(dir, 0o755)
-	spawn(dir, c.Terminal, "--title", "edge · "+r.Short(), "--working-directory", dir, "-e", c.Editor)
+	spawn(dir, c.Terminal, "--title", "edge · "+r.Short(), "--working-directory", dir, "-e", bin(c.Editor))
 }
 
 // launchClaude opens Claude in the workspace with the prompt already sent.
 func launchClaude(prompt string) {
-	spawn(workDir(), cfg().Terminal, "--title", "edge · claude", "--working-directory", workDir(), "-e", "claude", prompt)
+	spawn(workDir(), cfg().Terminal, "--title", "edge · claude", "--working-directory", workDir(), "-e", bin("claude"), prompt)
 }
