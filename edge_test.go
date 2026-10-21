@@ -718,3 +718,57 @@ func TestDefaultConfigTextMatchesDefaults(t *testing.T) {
 		t.Fatalf("shipped text differs from defaults:\n%+v\n%+v", *c, *d)
 	}
 }
+
+// The daemon records an AC and hands out the next task before the user asks
+// for the explain-back: done must still find the one that's waiting.
+func TestDoneFindsExplainBackAfterNextTask(t *testing.T) {
+	s := fresh(t)
+	at(t, wed)
+	s.History = append(s.History, Task{ID: "cf:1989A", Kind: "new", Title: "Catch the Coin", Outcome: "solo", Explain: -1,
+		Started: wed.Add(-time.Hour), Finished: wed.Add(-time.Minute)})
+	s.Current = &Task{ID: "cf:2261B", Kind: "upsolve", Title: "Capital", Assigned: wed, Explain: -1}
+	var buf strings.Builder
+	out = &buf
+	t.Cleanup(func() { out = os.Stdout })
+
+	if err := done(s, false, nil); err != nil {
+		t.Fatalf("done refused a waiting explain-back: %v", err)
+	}
+	if !strings.Contains(buf.String(), "EXPLAIN-BACK for Catch the Coin") {
+		t.Fatalf("wrong explain-back: %q", buf.String())
+	}
+	if s.Current == nil || s.Current.ID != "cf:2261B" {
+		t.Fatal("done must leave the unaccepted current task alone")
+	}
+	buf.Reset()
+	if err := explain(s, 1); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "recorded 1/2 for Catch the Coin") {
+		t.Fatalf("explain didn't name the task: %q", buf.String())
+	}
+	if err := done(s, false, nil); err == nil || !strings.Contains(err.Error(), "no accepted submission for Capital") {
+		t.Fatalf("with nothing waiting, done should ask for a submission: %v", err)
+	}
+	if err := done(s, false, fmt.Errorf("cf down")); err == nil || err.Error() != "cf down" {
+		t.Fatalf("a failed check should say so: %v", err)
+	}
+}
+
+func TestArgsChecked(t *testing.T) {
+	for _, c := range []struct {
+		cmd  string
+		args []string
+		ok   bool
+	}{
+		{"done", nil, true}, {"done", []string{"--dry-run"}, false}, {"next", []string{"x"}, false},
+		{"stats", []string{"--compact"}, true}, {"stats", []string{"-c"}, false},
+		{"skip", []string{"--seen"}, true}, {"stuck", []string{"--take", "2"}, true}, {"stuck", []string{"2"}, false},
+		{"explain", []string{"1"}, true}, {"explain", []string{"1", "2"}, false},
+		{"round", []string{"lesson", "a", "b"}, true}, {"action", []string{"explain"}, true},
+	} {
+		if got := argsOK(c.cmd, c.args); got != c.ok {
+			t.Errorf("argsOK(%s %v) = %v, want %v", c.cmd, c.args, got, c.ok)
+		}
+	}
+}

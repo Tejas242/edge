@@ -223,13 +223,22 @@ func accept(s *State, t *Task, at time.Time) {
 	finish(s, t, at)
 }
 
-func done(s *State, ok bool) error {
+// done records the current task's AC and starts its explain-back. The
+// daemon usually records the AC first and may already have handed out the
+// next task; then the explain-back still waiting is what done is for.
+func done(s *State, ok bool, verifyErr error) error {
 	t := s.Current
 	if t == nil {
-		// The daemon usually records the AC first; then this is just the explain-back.
 		return explainInfo(s)
 	}
 	if !ok {
+		if p := s.lastSolved(); p != nil {
+			fmt.Fprintf(out, "(%s isn't accepted yet; this is the explain-back for %s)\n", t.Title, p.Title)
+			return explainInfo(s)
+		}
+		if verifyErr != nil {
+			return verifyErr
+		}
 		return fmt.Errorf("no accepted submission for %s yet; submit it first", t.Title)
 	}
 	accept(s, t, now())
@@ -415,7 +424,7 @@ func explain(s *State, score int) error {
 		}
 		fmt.Fprintln(out, "Couldn't defend it, so it comes back as a cold re-solve.")
 	}
-	fmt.Fprintln(out, "recorded")
+	fmt.Fprintf(out, "recorded %d/2 for %s\n", t.Explain, t.Title)
 	return nil
 }
 

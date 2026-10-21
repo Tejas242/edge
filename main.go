@@ -28,6 +28,11 @@ func main() {
 		usage()
 	}
 	cmd, args := os.Args[1], os.Args[2:]
+	if cmd == "help" || cmd == "-h" || cmd == "--help" || slices.Contains(args, "-h") || slices.Contains(args, "--help") {
+		fmt.Println(usageText)
+		return
+	}
+	checkArgs(cmd, args)
 	switch cmd {
 	case "hook":
 		hookCmd()
@@ -84,6 +89,7 @@ func main() {
 		statement string
 		syncs     []syncData
 		verified  bool
+		verifyErr error
 	)
 	switch cmd {
 	case "next", "start":
@@ -100,7 +106,7 @@ func main() {
 		if t := snap.Current; t != nil {
 			ok, err := verifyAC(t)
 			if err != nil {
-				check(fmt.Errorf("couldn't verify with %s: %w", srcName(t.Source()), err))
+				verifyErr = fmt.Errorf("couldn't verify with %s: %w", srcName(t.Source()), err)
 			}
 			verified = ok
 		}
@@ -163,7 +169,7 @@ func main() {
 			if s.Current != nil && snap.Current != nil && s.Current.ID != snap.Current.ID {
 				return fmt.Errorf("the task changed while checking; run it again")
 			}
-			return done(s, verified)
+			return done(s, verified, verifyErr)
 		case "giveup":
 			return giveup(s, statement)
 		case "skip":
@@ -200,9 +206,38 @@ func main() {
 	}
 }
 
+const usageText = "usage: edge daemon|hook|action <key>|install|status|stats [--compact]|config [init]|next|start|stuck [--take N]|done|giveup|skip [--seen]|explain [0-2]|rounds|round [lesson <text>]|report|pass|sync"
+
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: edge daemon|hook|action <key>|install|status|stats [--compact]|config [init]|next|start|stuck [--take N]|done|giveup|skip [--seen]|explain [0-2]|rounds|round [lesson <text>]|report|pass|sync")
+	fmt.Fprintln(os.Stderr, usageText)
 	os.Exit(2)
+}
+
+// checkArgs rejects arguments a command doesn't take, so a typo or a flag
+// like --dry-run never runs the real command as if it weren't there.
+// hook, daemon and action are called by machines and check their own.
+func checkArgs(cmd string, args []string) {
+	if !argsOK(cmd, args) {
+		usage()
+	}
+}
+
+func argsOK(cmd string, args []string) bool {
+	switch cmd {
+	case "hook", "daemon", "action", "round":
+		return true
+	case "stats":
+		return len(args) == 0 || len(args) == 1 && args[0] == "--compact"
+	case "skip":
+		return len(args) == 0 || len(args) == 1 && args[0] == "--seen"
+	case "config":
+		return len(args) == 0 || len(args) == 1 && args[0] == "init"
+	case "stuck":
+		return len(args) == 0 || len(args) == 2 && args[0] == "--take"
+	case "explain":
+		return len(args) <= 1
+	}
+	return len(args) == 0
 }
 
 func check(err error) {
