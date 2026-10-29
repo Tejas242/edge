@@ -42,6 +42,9 @@ type Task struct {
 	SubSeen    int64     `json:"sub_seen"`             // newest submission time already processed
 	Round      string    `json:"round,omitempty"`      // upsolves: the round it's from
 	RoundName  string    `json:"round_name,omitempty"` // and its short name
+
+	Judging string `json:"-"`                 // runtime only: "" | "queue" | "test 9" while a submission is judged
+	Verdict string `json:"verdict,omitempty"` // latest rejected verdict with its test: "WA on test 3"
 }
 
 func (t *Task) Source() string {

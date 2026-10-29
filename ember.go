@@ -38,6 +38,38 @@ type emberStatus struct {
 	StartedMs int64       `json:"startedMs,omitempty"`
 	Pending   bool        `json:"pending,omitempty"`
 	Round     *emberRound `json:"round,omitempty"` // a round that's close, live, or just over
+
+	// Contract v2 (fix/base): all optional, old adapters ignore them.
+	TaskID      string      `json:"taskId,omitempty"`      // "cf:2277C"; actions name it: start:<id>, skip:<id> …
+	Short       string      `json:"short,omitempty"`       // pill label: "2277C", "LC 3542", "ABC482 D"
+	Kind        string      `json:"kind,omitempty"`        // new | resolve | reentry | upsolve | self
+	WorkSec     int         `json:"workSec,omitempty"`     // focused work on the current task
+	TodaySec    int         `json:"todaySec,omitempty"`    // focused work today (this day only)
+	Working     bool        `json:"working,omitempty"`     // work is being counted right now
+	Paused      bool        `json:"paused,omitempty"`      // started, but no work for a while: show frozen
+	AsOfMs      int64       `json:"asOfMs,omitempty"`      // when WorkSec was measured
+	Policy      string      `json:"policy,omitempty"`      // ladder | instant | cold | ""
+	HintsReady  bool        `json:"hintsReady,omitempty"`  // a hint can be taken now
+	NextHintSec int         `json:"nextHintSec,omitempty"` // focused seconds until the next hint, 0 = none coming
+	GiveUpInSec int         `json:"giveUpInSec"`           // focused seconds until give-up unlocks; 0 = now; -1 = never
+	CanSkip     bool        `json:"canSkip,omitempty"`     // skip:<id> is accepted
+	DueMs       int64       `json:"dueMs,omitempty"`       // upsolves: when it lapses
+	Lapsed      bool        `json:"lapsed,omitempty"`      // an upsolve past its due date
+	Judging     string      `json:"judging,omitempty"`     // "" | "test 9" | "queue": a submission being judged
+	LastVerdict string      `json:"lastVerdict,omitempty"` // "WA on test 3" for the latest rejected submission
+	Owed        []emberOwed `json:"owed,omitempty"`        // upsolves still owed, oldest first
+	Explain     string      `json:"explain,omitempty"`     // task id waiting for explain-back (finished ≤ 12h ago)
+	Debrief     string      `json:"debrief,omitempty"`     // round id waiting for its debrief
+	Health      string      `json:"health,omitempty"`      // one plain sentence when a judge is down
+	SeenMs      int64       `json:"seenMs,omitempty"`      // daemon heartbeat; the adapter treats > 90 s old as stopped
+}
+
+// emberOwed is one round that still owes upsolves.
+type emberOwed struct {
+	Round   string   `json:"round"`   // round id; upsolve:<round> starts its next one
+	Short   string   `json:"short"`   // "CF 1129"
+	Indexes []string `json:"indexes"` // ["C","D1"]
+	DueMs   int64    `json:"dueMs"`
 }
 
 // emberRound is the round the island shows: from two hours before it starts
