@@ -186,6 +186,11 @@ func cfProblems() ([]Problem, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseCF(b)
+}
+
+// parseCF turns cf_problems.json's bytes into problems.
+func parseCF(b []byte) ([]Problem, error) {
 	var r struct {
 		Problems []cfProblem `json:"problems"`
 	}
@@ -348,6 +353,11 @@ func lcQuestions() (map[string]lcQ, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseLCQuestions(b)
+}
+
+// parseLCQuestions is lc_questions.json by slug.
+func parseLCQuestions(b []byte) (map[string]lcQ, error) {
 	var all []lcQ
 	if err := json.Unmarshal(b, &all); err != nil {
 		return nil, err
@@ -376,6 +386,12 @@ func lcProblems() ([]Problem, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseLC(qs, b), nil
+}
+
+// parseLC joins zerotrac's ratings.txt with the question list: rated, free
+// problems only.
+func parseLC(qs map[string]lcQ, b []byte) []Problem {
 	var out []Problem
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Scan() // header
@@ -396,7 +412,7 @@ func lcProblems() ([]Problem, error) {
 		}
 		out = append(out, p)
 	}
-	return out, nil
+	return out
 }
 
 var (
