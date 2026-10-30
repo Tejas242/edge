@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math"
@@ -697,7 +698,12 @@ func (s *State) startDrill() (string, error) {
 			if len(cands) == 0 {
 				continue
 			}
-			p := cands[rand.IntN(len(cands))]
+			// blind, but on target: a random one of the closest few, so P stays near drillP
+			slices.SortFunc(cands, func(a, b Problem) int {
+				da, db := math.Abs(float64(cfScale(src, a.Rating))-target), math.Abs(float64(cfScale(src, b.Rating))-target)
+				return cmp.Compare(da, db)
+			})
+			p := cands[rand.IntN(min(5, len(cands)))]
 			putBack(s, day(now()).AddDate(0, 0, 1))
 			d := cfScale(src, p.Rating)
 			pp := round3(solveP(k.Theta, float64(d)))
