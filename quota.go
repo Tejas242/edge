@@ -37,8 +37,12 @@ func studyTime(t time.Time) bool {
 	return t.Sub(day(t)) >= from
 }
 
-// dailyMin is the tasks needed on the day instant t falls in.
+// dailyMin is the tasks needed on the day instant t falls in. In the trial
+// phases a day needs one rep, weekends included.
 func (s *State) dailyMin(t time.Time) int {
+	if s.consOn(t) {
+		return 1
+	}
 	r := s.rules()
 	if weekend(t) {
 		return r.WeekendMin
@@ -76,13 +80,22 @@ func (s *State) creditsSince(from time.Time) int {
 	return n
 }
 
+// today is the day's progress the gate holds him to. In the trial phases it's
+// the rep: (1, 1) once it counts, (0, 1) before, (0, 0) on a token night.
 func (s *State) today() (got, need int) {
+	if s.consOn(now()) {
+		return s.consToday()
+	}
 	return s.creditsSince(day(now())), s.dailyMin(now())
 }
 
 // streak counts consecutive days, ending today or yesterday, that met the
-// minimum. A pass day neither counts nor breaks it.
+// minimum. A pass day neither counts nor breaks it. In the trial phases it's
+// the chain.
 func (s *State) streak() int {
+	if s.consOn(now()) {
+		return s.chain().Chain
+	}
 	byDay := map[time.Time]int{}
 	for _, t := range s.History {
 		if c := credit(t); c > 0 {
