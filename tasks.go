@@ -182,6 +182,7 @@ func begin(s *State, t *Task, at time.Time) {
 		t.Policy = s.pickPolicy()
 		t.Arm = t.Policy
 	}
+	logEvent("start", map[string]any{"task": t.ID, "kind": t.Kind, "policy": t.Policy})
 }
 
 func describe(s *State, t *Task) string {
@@ -295,6 +296,7 @@ func accept(s *State, t *Task, at time.Time) {
 		t.Known = true
 		s.Seen[t.ID] = true
 	}
+	logEvent("verdict", map[string]any{"task": t.ID, "verdict": "AC", "outcome": t.Outcome, "work_sec": t.WorkSec})
 	finish(s, t, at)
 }
 

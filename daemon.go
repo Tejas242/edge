@@ -439,6 +439,7 @@ func acVerdictName(v string) string {
 
 func failEvent(t *Task, title string) event {
 	t.Fails++
+	logEvent("verdict", map[string]any{"task": t.ID, "verdict": title, "fails": t.Fails})
 	e := event{Key: fmt.Sprintf("fail:%s:%d", t.ID, t.Fails), Title: title, Body: t.Title}
 	if lvl, _ := hintAllowance(t); t.Fails >= 2 && lvl > t.Hints {
 		e.Body += fmt.Sprintf("\n%d misses. A hint is available.", t.Fails)
