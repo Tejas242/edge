@@ -45,3 +45,20 @@ Added by fix/core (fields only): `emberCard.ttl_s`; `Task.work_days` (work by ed
 - Unknown action keys fall through to consistencyAction, then readinessAction. Add new keys to ActionKeys.
 - Ember v2.1: `Card.Chips` (≤ 6 small choice chips under the body; a press sends the chip's key) and bars
   `Item.Lo`/`Item.Hi` (an interval band drawn behind the bar, same 0..max scale).
+
+### Trial 1 (v2/consistency), fields and keys added
+
+- Action keys: `cue:now`, `cue:HH:MM` (tonight's rep time; a past time means now; 00:00–03:59 is that night),
+  `skiptonight` (a token: before the cue, `[trials] skip_tokens` a week). Before Trial 1 they answer an error.
+- Cards: `cue` (the one "When?" card a day, with chips Now · cue · cue+90 · "Skip (N left)"; chip labels fit
+  Ember's 18 characters), `cuenudge` (one card with Start, 15 min past the cue), `trialend` (Trial 1's result, once).
+- Status: `deadlineMs` while not working = asOfMs + (45 m − workSec); while working it's left out of the push key
+  (it moves with the clock's anchor). `cueMs` is set until tonight's rep counts or a token is used.
+  `streak` is the chain in the trial phases. A token night has `need` 0.
+- Phase: a reverted Trial 1 reads `baseline` again; stats `consistency.reverted` (and `verdict`) say why.
+- Stats `consistency`: phase, trial_from, trial_to, trial2_from, trial_days, days[{date, phase, rep, kind, cue_set,
+  cue, cue_to_start_min (null = no start), token, today}] (the last 28 days, oldest first), reps, show_up_14 (0..1,
+  the 14 days before today), median_cue_to_start_min (null = none), chain, missed, rep_done, skip_tokens,
+  success_at, revert_below, reverted, verdict {reps, days, reverted, at}.
+- State: `consistency` {days (per-day records, 60 kept), tokens, seen_at, chain, verdict, reverted}.
+- Event log: cue_shown, cue_set, rep, chain_break, token_used, trial_end.
