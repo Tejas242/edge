@@ -245,30 +245,63 @@ type calendar struct {
 	Err    error
 }
 
-// gather does the tick's network I/O, deciding from a lock-free snapshot.
-func gather(snap *State) gathered {
-	var g gathered
+// fetchPlan is what one gather will fetch, decided from a snapshot.
+type fetchPlan struct {
+	syncs []string
+	cals  []string
+	obs   []Round
+	cat   bool
+	judge *Task
+}
+
+func (p fetchPlan) empty() bool {
+	return len(p.syncs) == 0 && len(p.cals) == 0 && len(p.obs) == 0 && !p.cat && p.judge == nil
+}
+
+// planFetch decides from a lock-free snapshot; pollJudge comes from the
+// daemon's judgePlan.
+func planFetch(snap *State, pollJudge bool) fetchPlan {
+	var p fetchPlan
 	for _, src := range syncSources() {
 		if snap.syncDue(src) {
-			g.syncs = append(g.syncs, fetchSync(src, src == "cf" && now().Sub(snap.leg("cf").Full) >= fullEvery))
+			p.syncs = append(p.syncs, src)
 		}
 	}
 	if cfg().Rounds {
 		for _, j := range cfg().RoundJudges {
 			if snap.syncDue("cal-" + j) {
-				cal, err := fetchCalendar(j)
-				g.cals = append(g.cals, calendar{Judge: j, Rounds: cal, Err: err})
+				p.cals = append(p.cals, j)
 			}
 		}
-		for _, r := range snap.observeDue() {
-			g.obs = append(g.obs, observe(r, now()))
-		}
+		p.obs = snap.observeDue()
 	}
-	if snap.wantsAssign() {
+	p.cat = snap.wantsAssign()
+	if t := snap.Current; t != nil && pollJudge {
+		c := *t
+		p.judge = &c
+	}
+	return p
+}
+
+// gather does the network I/O a plan asks for, outside the lock. full is
+// decided here so a slow gather doesn't fetch the whole history twice.
+func (p fetchPlan) gather(snap *State) gathered {
+	var g gathered
+	for _, src := range p.syncs {
+		g.syncs = append(g.syncs, fetchSync(src, src == "cf" && now().Sub(snap.leg("cf").Full) >= fullEvery))
+	}
+	for _, j := range p.cals {
+		cal, err := fetchCalendar(j)
+		g.cals = append(g.cals, calendar{Judge: j, Rounds: cal, Err: err})
+	}
+	for _, r := range p.obs {
+		g.obs = append(g.obs, observe(r, now()))
+	}
+	if p.cat {
 		g.cat = loadCatalog()
 	}
-	if t := snap.Current; t != nil && now().Sub(snap.LastPoll) >= pollEvery {
-		g.judge = fetchJudge(t)
+	if p.judge != nil {
+		g.judge = fetchJudge(p.judge)
 	}
 	return g
 }

@@ -229,8 +229,9 @@ func (h heldCard) expired(n time.Time) bool {
 // the cards still worth showing, so a card isn't lost to an Ember (or edge
 // plugin) restart and a stale button never acts on the next task.
 type emberLink struct {
-	ok       bool // the last message was delivered
-	last     []byte
+	ok       bool   // the last message was delivered
+	last     []byte // the status as statusKey sees it: no clock fields
+	anchor   int64  // the running clock's start, in ms
 	lastSent time.Time
 	live     map[string]heldCard // by card id
 	pending  map[string]heldCard
@@ -312,9 +313,10 @@ func (l *emberLink) tick(st emberStatus, evs []event, acts chan<- string) (said 
 	}
 	n := time.Now()
 	// resend now and then too: Ember forgets everything when it restarts
-	if b, _ := json.Marshal(st); !slices.Equal(b, l.last) || n.Sub(l.lastSent) > time.Minute {
+	// a running clock alone isn't a change: Ember counts it from the anchor
+	if b, anchor := statusKey(st); !slices.Equal(b, l.last) || abs64(anchor-l.anchor) > 3000 || n.Sub(l.lastSent) > time.Minute {
 		if l.send(map[string]any{"type": "status", "status": st}) == emberOK {
-			l.last, l.lastSent = b, n
+			l.last, l.anchor, l.lastSent = b, anchor, n
 		}
 	}
 	// cards about something that's over come down (pending ones were never shown)
@@ -446,6 +448,7 @@ func edgeStatus(s *State) emberStatus {
 	if ks := s.troublesDue(); len(ks) > 0 {
 		st.Health = plainTrouble(s, ks[0])
 	}
+	runtimeStatus(s, &st) // working, paused, the clock's anchor, judging: for CLI pushes too
 	return st
 }
 
