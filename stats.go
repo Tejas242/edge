@@ -740,6 +740,9 @@ type statsWriter struct {
 	lastPush time.Time
 }
 
+// pushLimit keeps the stats push well under Ember's 60 KB line limit.
+const pushLimit = 48 << 10
+
 func (w *statsWriter) publish(st Stats) {
 	body := statsBody(st)
 	changed := !bytes.Equal(body, w.last)
@@ -754,7 +757,13 @@ func (w *statsWriter) publish(st Stats) {
 	}
 	// resend now and then too: Ember forgets everything when it restarts
 	if changed || time.Since(w.lastPush) > 5*time.Minute {
-		if toEmber(map[string]any{"type": "stats", "stats": st}) {
+		// Ember drops a line over 60 KB: past pushLimit, send a ping and let
+		// the adapter read the file edge just wrote
+		msg := map[string]any{"type": "stats", "stats": st}
+		if len(body) > pushLimit {
+			msg = map[string]any{"type": "stats"}
+		}
+		if toEmber(msg) {
 			w.lastPush = time.Now()
 		}
 	}
