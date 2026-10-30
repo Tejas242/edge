@@ -27,3 +27,11 @@ Undelivered cards are kept and resent when Ember is back (edge sees the next ok:
 
 Cards: Body may contain "\n" (Ember keeps line breaks). Cards with buttons carry `ttl_s` = how long their action
 stays valid (default 600); edge sends `{"type":"remove","id":…}` when the card's task ends.
+
+The full key list is `ActionKeys` (actions.go); `TestEveryActionKeyIsHandled` checks edge answers every one.
+Errors are one sentence on stderr ("Finish 2277C first."); a stale id says which task is current now.
+
+Added by fix/core (fields only): `emberCard.ttl_s`; `Task.work_days` (work by edge day, state.json); `Round.plan_was`
+(the plan before "Can't make it", for its undo); stats `current.due` / `current.lapsed`. Card ids stay the event slot
+(offer, hint, giveup, cold, drift, fail, late, ac, lapsed, undo, round…), so `remove` takes the same ids.
+`giveUpInSec` is -1 when there's no started task. `health` is a plain sentence; the raw error is in the journal.
