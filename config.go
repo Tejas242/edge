@@ -210,6 +210,14 @@ func cfg() *Config {
 }
 
 // resetConfig forgets the cached config (tests).
+// configErrs is a copy of the config lines that didn't parse, read under
+// the config lock.
+func configErrs() []string {
+	confMu.Lock()
+	defer confMu.Unlock()
+	return append([]string(nil), confErrs...)
+}
+
 func resetConfig() {
 	confMu.Lock()
 	conf = nil

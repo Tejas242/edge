@@ -415,7 +415,7 @@ func configReport() string {
 	} else {
 		fmt.Fprintf(&b, "config: %s (not written yet; defaults in use, `edge install` writes it)\n", p)
 	}
-	for _, e := range confErrs {
+	for _, e := range configErrs() {
 		fmt.Fprintf(&b, "  ignored: %s\n", e)
 	}
 	fmt.Fprintf(&b, "accounts: cf %s, lc %s\n", c.CFUser, c.LCUser)

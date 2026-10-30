@@ -53,6 +53,7 @@ offset. Dates (`"2026-10-15"`) are **edge days**, which end at `day_ends`
     "hints": 0, "hints_allowed": 1,           // used / unlocked now
     "next_hint_sec": 840,                     // more work until the next unlocks (ladder)
     "give_up_in_sec": 2340,                   // more work until giving up is allowed
+    "due": "…", "lapsed": false,             // upsolves: when it lapses, and whether it has
     "fails": 2, "explain": -1, "credit": 0,
     "resolve_stage": 1                        // re-solves only
   },
@@ -117,7 +118,7 @@ offset. Dates (`"2026-10-15"`) are **edge days**, which end at `day_ends`
       "focus": "dp", "tags": ["dp", "greedy"] }      // only for problems worked through
   ],
 
-  "health": [ { "key": "cf", "since": "…", "msg": "can't reach Codeforces …" } ],
+  "health": [ { "key": "cf", "since": "…", "msg": "Codeforces isn't answering · verdicts may be late · edge keeps trying" } ],
   "daemon": { "alive": true, "seen": "…", "gate_hook_seen": "…" },
 
   "rounds": {                                 // live contests (added within version 1)

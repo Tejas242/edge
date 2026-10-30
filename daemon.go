@@ -108,8 +108,8 @@ func step(s *State, w window, g gathered, dt time.Duration) []event {
 			s.trouble("gate", "the edge hook is missing from ~/.claude/settings.json, or hooks are disabled: run `edge install`")
 		}
 	}
-	if len(confErrs) > 0 {
-		s.trouble("config", "config.toml: "+strings.Join(confErrs, "; "))
+	if errs := configErrs(); len(errs) > 0 {
+		s.trouble("config", "config.toml: "+strings.Join(errs, "; "))
 	} else {
 		s.fixed("config")
 	}

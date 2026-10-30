@@ -146,6 +146,8 @@ type StatsTask struct {
 	HintsAllowed int       `json:"hints_allowed"`            // current task only
 	NextHintSec  int       `json:"next_hint_sec,omitempty"`  // work until the next unlocks
 	GiveUpInSec  int       `json:"give_up_in_sec,omitempty"` // work until giving up is allowed
+	Due          time.Time `json:"due,omitzero"`             // current upsolve: when it lapses
+	Lapsed       bool      `json:"lapsed,omitempty"`         // current upsolve past its due
 	Fails        int       `json:"fails"`
 	Explain      int       `json:"explain"`                 // 0..2, -1 = not done
 	Credit       int       `json:"credit"`                  // what it earned for its day
@@ -312,6 +314,9 @@ func (s *State) stats() Stats {
 		}
 		if ok, wait := canGiveUp(t); !ok && t.Active() {
 			ct.GiveUpInSec = int(wait.Seconds())
+		}
+		if p := s.upsolveOf(t); p != nil {
+			ct.Due, ct.Lapsed = p.Due, p.State == "lapsed" || !p.Due.After(n)
 		}
 		st.Current = &ct
 	}
@@ -539,7 +544,7 @@ func (s *State) stats() Stats {
 
 	// health
 	for _, k := range slices.Sorted(mapsKeys(s.Trouble)) {
-		st.Health = append(st.Health, StatsTrouble{Key: k, Since: s.Trouble[k].Since, Msg: s.Trouble[k].Msg})
+		st.Health = append(st.Health, StatsTrouble{Key: k, Since: s.Trouble[k].Since, Msg: plainTrouble(s, k)}) // the raw error stays in the journal
 	}
 	seen := mtime(daemonSeenPath())
 	st.Daemon = StatsDaemon{Alive: !seen.IsZero() && time.Since(seen) < 2*time.Minute, Seen: seen, Gate: gateSeen()}
