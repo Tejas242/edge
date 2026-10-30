@@ -63,13 +63,13 @@ type Config struct {
 func defaultConfig() *Config {
 	h, _ := os.UserHomeDir()
 	return &Config{
-		CFUser: "screenager", LCUser: "screenager", ACUser: "screenager",
+		CFUser: "", LCUser: "", ACUser: "", // your own handles, under [accounts]
 		WeekdayFrom: 19 * time.Hour, WeekendFrom: 10 * time.Hour, DayEnds: 4 * time.Hour,
 		WeekdayMin: 1, WeekendMin: 3, Weekly: 12, HonestTry: 45 * time.Minute,
 		Gate: true, Workspace: filepath.Join(h, "CP"),
 		Sources: []string{"cf", "lc"}, Rating: map[string]int{}, BandWidth: 300, AnyTopic: 0.3,
 		Focus: map[string]map[string]float64{
-			// Weak areas from the screenager history: graphs 5, trees 2, dsu 1,
+			// Weak areas from the author's history: graphs 5, trees 2, dsu 1,
 			// shortest paths 0, dp 25. Weight is how much interview mileage the tag has.
 			"cf": {"graphs": 3, "trees": 3, "dfs and similar": 2, "dsu": 2, "shortest paths": 2,
 				"dp": 3, "data structures": 2, "binary search": 1, "two pointers": 1, "bitmasks": 1},
@@ -105,9 +105,9 @@ const defaultConfigText = `# edge: changes apply within a minute, no restart nee
 # workspace) take effect tomorrow; stricter ones apply right away.
 
 [accounts]
-codeforces = "screenager"
-leetcode   = "screenager"
-atcoder    = "screenager"
+codeforces = ""  # your handles: edge reads your submissions and ratings
+leetcode   = ""
+atcoder    = ""
 
 [schedule]
 weekday_from = "19:00"  # when problems are offered and the gate closes, Mon-Fri

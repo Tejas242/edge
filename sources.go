@@ -146,6 +146,10 @@ type cfSub struct {
 }
 
 func cfSubs(count int) ([]cfSub, error) {
+	if err := needHandle("Codeforces", cfg().CFUser); err != nil {
+		return nil, err
+	}
+
 	var subs []cfSub
 	q := "user.status?handle=" + cfg().CFUser
 	if count > 0 {
@@ -155,6 +159,10 @@ func cfSubs(count int) ([]cfSub, error) {
 }
 
 func cfRating() (int, error) {
+	if err := needHandle("Codeforces", cfg().CFUser); err != nil {
+		return 0, err
+	}
+
 	var u []struct {
 		Rating int `json:"rating"`
 	}
@@ -238,6 +246,10 @@ type lcAC struct {
 
 // lcProfile is the contest rating, its history and the last 20 accepts.
 func lcProfile() (rating int, history []RatingPoint, recent []lcAC, err error) {
+	if err := needHandle("LeetCode", cfg().LCUser); err != nil {
+		return 0, nil, nil, err
+	}
+
 	var r struct {
 		Rank *struct {
 			Rating float64 `json:"rating"`
@@ -269,6 +281,10 @@ func lcProfile() (rating int, history []RatingPoint, recent []lcAC, err error) {
 
 // cfRatingHistory is every rated contest's result.
 func cfRatingHistory() ([]RatingPoint, error) {
+	if err := needHandle("Codeforces", cfg().CFUser); err != nil {
+		return nil, err
+	}
+
 	var rs []struct {
 		ID      int    `json:"contestId"`
 		Contest string `json:"contestName"`
@@ -299,6 +315,10 @@ func (x lcSub) unix() int64 {
 
 // lcSubs is the public recent-submissions list (last 20, all verdicts).
 func lcSubs() ([]lcSub, error) {
+	if err := needHandle("LeetCode", cfg().LCUser); err != nil {
+		return nil, err
+	}
+
 	var r struct {
 		Subs []lcSub `json:"recentSubmissionList"`
 	}
@@ -429,4 +449,13 @@ func lcStatement(slug string) (string, error) {
 	err := lcQuery(`query($s:String!){question(titleSlug:$s){content}}`, map[string]any{"s": slug}, &r)
 	txt := html.UnescapeString(tagRe.ReplaceAllString(r.Q.Content, ""))
 	return strings.TrimSpace(blankRe.ReplaceAllString(txt, "\n\n")), err
+}
+
+// needHandle stops a judge call before it asks about nobody: the handles are
+// the user's own, set under [accounts] in the config.
+func needHandle(site, handle string) error {
+	if handle == "" {
+		return fmt.Errorf("no %s handle: set it under [accounts] in ~/.config/edge/config.toml", site)
+	}
+	return nil
 }

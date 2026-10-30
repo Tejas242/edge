@@ -570,7 +570,7 @@ terminal = "kitty"
 x = 1
 `)
 	c := cfg()
-	if c.CFUser != "tourist" || c.LCUser != "screenager" || c.WeekdayFrom != 18*time.Hour+30*time.Minute || c.DayEnds != 4*time.Hour {
+	if c.CFUser != "tourist" || c.LCUser != "" || c.WeekdayFrom != 18*time.Hour+30*time.Minute || c.DayEnds != 4*time.Hour {
 		t.Fatalf("accounts/schedule: %+v", c)
 	}
 	if c.WeekdayMin != 2 || len(c.Sources) != 1 || c.AnyTopic != 0.5 || c.Terminal != "kitty" {
