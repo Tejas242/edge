@@ -36,6 +36,7 @@ type Task struct {
 	ProbeTry   int       `json:"probe_try,omitempty"`  // 0 = first attempt at this stage
 	Fails      int       `json:"fails"`                // rejected submissions seen
 	WorkSec    int       `json:"work_sec"`             // seconds of real work seen (problem, editor or terminal in focus)
+	WorkAt     time.Time `json:"work_at,omitempty"`    // when work was last counted: working now, or paused
 	DriftSec   int       `json:"drift_sec"`            // seconds on distractions while active
 	Edited     bool      `json:"edited,omitempty"`     // the solution file changed after starting
 	Offers     int       `json:"offers,omitempty"`     // times offered without being started
@@ -109,7 +110,6 @@ type State struct {
 	CFDone    map[string]int64         `json:"cf_done"`    // problem -> first accepted unix time
 	CFTried   map[string]bool          `json:"cf_tried"`
 	Sync      map[string]*syncLeg      `json:"sync"`
-	LastPoll  time.Time                `json:"last_poll"`
 	Snooze    time.Time                `json:"snooze"`
 	LastAct   string                   `json:"last_act,omitempty"` // last button, to drop double clicks
 	LastActAt time.Time                `json:"last_act_at,omitempty"`

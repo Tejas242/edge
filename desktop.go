@@ -86,13 +86,9 @@ func focused() window {
 	if err != nil {
 		return window{}
 	}
-	var w struct {
-		AppID string `json:"app_id"`
-		Title string `json:"title"`
-		PID   int    `json:"pid"`
-	}
+	var w niriWin
 	json.Unmarshal(out, &w)
-	return window{App: w.AppID, Title: w.Title, PID: w.PID}
+	return w.window()
 }
 
 // procCwds is the working directories of every process under pid (not pid

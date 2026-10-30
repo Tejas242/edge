@@ -2,10 +2,8 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -32,11 +30,18 @@ type event struct {
 func (e event) slot() string { return strings.SplitN(e.Key, ":", 2)[0] }
 
 type window struct {
+	ID         uint64 // niri's window id, for the per-window cwd cache
 	App, Title string
 	PID        int // the window's process, for terminals
 }
 
 var terminals = []string{"alacritty", "kitty", "foot", "ghostty", "wezterm", "konsole", "terminal", "xterm"}
+
+// judgeWords mark a judge's pages in a browser title. AtCoder's task pages
+// don't name AtCoder ("D - Takahashi the Wall Breaker"): the task's own
+// title catches its page, "atcoder" the contest, submission and editorial
+// pages.
+var judgeWords = []string{"codeforces", "leetcode", "atcoder", "cp-algorithms", "usaco.guide"}
 
 // working: does the screen say they're on the problem? The problem or a
 // judge in the browser, a terminal whose programs (shell, editor, Claude)
@@ -46,16 +51,29 @@ func working(w window, t *Task, fileFresh bool, ws string) bool {
 	if fileFresh {
 		return true
 	}
-	app, title := strings.ToLower(w.App), strings.ToLower(w.Title)
-	for _, term := range terminals {
-		if strings.Contains(app, term) {
-			return w.PID > 0 && slices.ContainsFunc(procCwds(w.PID), func(d string) bool { return under(d, ws) })
-		}
+	if isTermApp(w.App) {
+		return w.PID > 0 && cwdsUnder(procCwds(w.PID), ws)
 	}
-	for _, k := range []string{"codeforces", "leetcode", "atcoder", "cp-algorithms", "usaco.guide"} {
-		if strings.Contains(title, k) {
-			return true
-		}
+	return judgeTab(w, senseTask{Title: t.Title})
+}
+
+func isTermApp(app string) bool {
+	app = strings.ToLower(app)
+	return slices.ContainsFunc(terminals, func(term string) bool { return strings.Contains(app, term) })
+}
+
+func cwdsUnder(cwds []string, ws string) bool {
+	return slices.ContainsFunc(cwds, func(d string) bool { return under(d, ws) })
+}
+
+// judgeTab: a browser window on a judge, or on the task itself.
+func judgeTab(w window, t senseTask) bool {
+	if isTermApp(w.App) {
+		return false
+	}
+	title := strings.ToLower(w.Title)
+	if slices.ContainsFunc(judgeWords, func(k string) bool { return strings.Contains(title, k) }) {
+		return true
 	}
 	return t.Title != "" && strings.Contains(title, strings.ToLower(t.Title))
 }
@@ -83,10 +101,9 @@ func (s *State) stale() bool {
 
 // step is one daemon tick under the lock: apply what gather fetched, track
 // work, judge. Returns what to say. No network. dt is the time since the
-// last tick, capped: a suspend or a stall isn't work.
+// last step, capped (drift accounting); work itself comes from the sensor.
 func step(s *State, w window, g gathered, dt time.Duration) []event {
-	n := now()
-	dt = max(0, min(dt, 2*tickEvery))
+	dt = max(0, min(dt, 2*idleTick))
 	s.pin()
 	for _, d := range g.syncs {
 		s.applySync(d)
@@ -124,16 +141,15 @@ func step(s *State, w window, g gathered, dt time.Duration) []event {
 	}
 	var evs []event
 	if t := s.Current; t != nil {
-		if st, err := os.Stat(solutionPath(t)); err == nil {
-			if !t.Active() && st.ModTime().After(t.Assigned) {
-				begin(s, t, st.ModTime()) // Competitive Companion / nvim created the file: they've started
+		if at, ok := sense.fileTime(solutionPath(t)); ok {
+			if !t.Active() && at.After(t.Assigned) {
+				begin(s, t, at) // Competitive Companion / nvim created the file: they've started
 			}
-			if t.Active() && st.ModTime().After(t.Started) {
+			if t.Active() && at.After(t.Started) {
 				t.Edited = true
 			}
 		}
 		if j := g.judge; j != nil && j.ID == t.ID {
-			s.LastPoll = j.Polled
 			if j.Err != nil {
 				s.trouble(t.Source(), fmt.Sprintf("can't reach %s to check your submissions: %v", srcName(t.Source()), j.Err))
 			} else {
@@ -149,15 +165,7 @@ func step(s *State, w window, g gathered, dt time.Duration) []event {
 			}
 		}
 	}
-	if t := s.Current; t != nil && t.Active() && s.liveHeld() == nil { // a round's time isn't the task's
-		fresh := false
-		if st, err := os.Stat(solutionPath(t)); err == nil {
-			fresh = n.Sub(st.ModTime()) < editFresh
-		}
-		if working(w, t, fresh, s.practiceDir()) {
-			t.WorkSec += int(dt.Seconds())
-		}
-	}
+	trackWork(s, w, dt)
 	evs = append(evs, plan(s, w, dt)...)
 	return s.filter(evs)
 }
@@ -558,54 +566,74 @@ func onAction(key string) {
 	}
 }
 
+// daemon is edge's loop. It steps on a tick (20 s while a task is started or
+// a round is near, 60 s otherwise), when a gather lands, after an action, and
+// 3 s after the sensor reports a change (work starting or stopping, the
+// problem file arriving, a submit). Network I/O runs in its own goroutine,
+// one gather at a time, so a stalled judge never holds the loop or the clock.
 func daemon() {
 	log.SetFlags(0)
 	log.Println("edge daemon up")
+	sense = newSensor()
+	sense.start(workDir())
 	acts := make(chan string, 8)
-	var last []byte
-	var lastSent, brokenSaid, lastTick time.Time
-	var sw statsWriter
+	landed := make(chan gathered, 1)
+	var (
+		g                                    gathered
+		gathering                            bool
+		jp                                   judgePlan
+		lastKey                              []byte
+		lastAnchor                           int64
+		lastSent, brokenSaid, lastStep, seen time.Time
+		sw                                   statsWriter
+		next                                 = busyTick
+	)
 	for {
-		touch(daemonSeenPath())
-		snap, err := load()
-		if err != nil {
-			// no state and no backup: say so, at most hourly
-			log.Println("state:", err)
-			if time.Since(brokenSaid) > time.Hour {
-				notify(event{Key: "health:state", Title: "edge is stopped", Body: err.Error(), Urgent: true}, acts)
-				brokenSaid = time.Now()
-			}
-			time.Sleep(tickEvery)
-			continue
+		if time.Since(seen) >= busyTick {
+			touch(daemonSeenPath())
+			seen = time.Now()
 		}
-		g := gather(snap)
 		ok := gateInstalled()
 		g.gateOK = &ok
-		w := focused()
-		var evs []event
-		var st emberStatus
-		var stats *Stats
+		w := sense.window()
 		var dt time.Duration
-		if !lastTick.IsZero() {
-			dt = time.Since(lastTick)
+		if !lastStep.IsZero() {
+			dt = time.Since(lastStep)
 		}
-		lastTick = time.Now()
+		lastStep = time.Now()
+		polled := g.judge != nil && g.judge.Err == nil
+		var (
+			evs   []event
+			st    emberStatus
+			stats *Stats
+			snap  *State
+		)
 		if err := update(func(s *State) error {
 			evs = step(s, w, g, dt)
 			st = edgeStatus(s)
+			runtimeStatus(s, &st)
 			x := s.stats()
 			stats = &x
+			snap = s // not touched after update returns: a safe snapshot for planning
 			return nil
 		}); err != nil {
 			log.Println("tick:", err)
+			if snap == nil && time.Since(brokenSaid) > time.Hour {
+				// no state and no backup: say so, at most hourly
+				notify(event{Key: "health:state", Title: "edge is stopped", Body: err.Error(), Urgent: true}, acts)
+				brokenSaid = time.Now()
+			}
 		}
+		g = gathered{}
 		if stats != nil {
 			sw.publish(*stats)
 		}
-		// resend now and then too: Ember forgets everything when Noctalia restarts
-		if b, _ := json.Marshal(st); !bytes.Equal(b, last) || time.Since(lastSent) > time.Minute {
+		// push on a real change, and every minute as the heartbeat (Ember
+		// forgets everything when Noctalia restarts)
+		key, anchor := statusKey(st)
+		if !bytes.Equal(key, lastKey) || abs64(anchor-lastAnchor) > 3000 || time.Since(lastSent) > time.Minute {
 			if toEmber(map[string]any{"type": "status", "status": st}) {
-				last, lastSent = b, time.Now()
+				lastKey, lastAnchor, lastSent = key, anchor, time.Now()
 			}
 		}
 		var said []string
@@ -622,11 +650,62 @@ func daemon() {
 				log.Println("mark said:", err)
 			}
 		}
-		select {
-		case k := <-acts:
-			log.Println("action", k)
-			onAction(k)
-		case <-time.After(tickEvery):
+		n := time.Now()
+		if snap != nil {
+			if polled {
+				jp.polled(st.Judging, n)
+			}
+			if t := snap.Current; t != nil && t.Active() {
+				jp.signal(sense.submitted(), n)
+			}
+			next = tickFor(snap)
+			if !gathering {
+				var lastWork time.Time
+				if t := snap.Current; t != nil {
+					lastWork = t.WorkAt
+				}
+				if p := planFetch(snap, jp.due(snap.Current, lastWork, n)); !p.empty() {
+					if p.judge != nil {
+						jp.last = n
+					}
+					gathering = true
+					go func() { landed <- p.gather(snap) }()
+				}
+			}
 		}
+		d := next
+		if !gathering { // in flight: its landing wakes the loop
+			d = max(time.Second, jp.wait(next, n))
+		}
+		timer := time.NewTimer(d)
+		var settle <-chan time.Time
+	wait:
+		for {
+			select {
+			case k := <-acts:
+				log.Println("action", k)
+				onAction(k)
+				break wait
+			case g = <-landed:
+				gathering = false
+				break wait
+			case <-timer.C:
+				break wait
+			case <-sense.wake:
+				if settle == nil {
+					settle = time.After(flipDelay)
+				}
+			case <-settle:
+				break wait
+			}
+		}
+		timer.Stop()
 	}
+}
+
+func abs64(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
