@@ -354,7 +354,7 @@ func (l *emberLink) tick(st emberStatus, evs []event, acts chan<- string) (said 
 			if sendEmber(map[string]any{"type": "card", "card": h.card}) == emberOK {
 				said = append(said, h.key)
 				delete(l.pending, id)
-				if len(h.card.Buttons) > 0 {
+				if len(h.card.Buttons)+len(h.card.Chips) > 0 {
 					l.live[id] = h
 				}
 			}
@@ -366,7 +366,7 @@ func (l *emberLink) tick(st emberStatus, evs []event, acts chan<- string) (said 
 		switch l.send(map[string]any{"type": "card", "card": c}) {
 		case emberOK:
 			delete(l.pending, c.ID)
-			if len(c.Buttons) > 0 {
+			if len(c.Buttons)+len(c.Chips) > 0 { // chip cards too: they come down with their task
 				l.live[c.ID] = h
 			} else {
 				delete(l.live, c.ID)

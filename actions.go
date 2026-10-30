@@ -67,6 +67,18 @@ func onAction(key string) {
 // status to Ember, so the island follows the click at once. A repeat of the
 // same key within a few seconds (a double click) does nothing.
 func act(key string) (string, error) {
+	msg, err := act1(key)
+	if err == nil && key == "cue:now" { // "Now" means now: open tonight's problem too
+		m, serr := act1("start")
+		if serr == nil {
+			return m, nil
+		}
+		log.Printf("cue:now: couldn't start: %v", serr)
+	}
+	return msg, err
+}
+
+func act1(key string) (string, error) {
 	verb, arg, _ := strings.Cut(key, ":")
 	var cat *catalog
 	if verb == "start" || verb == "open" || verb == "next" || verb == "skip" {
