@@ -47,10 +47,10 @@ func TestReadySeedFromCodeforcesHistory(t *testing.T) {
 	sk := s.skills(func() map[string]Problem { m, _ := readyCatalog(); return m }())
 	all := quantile([]float64{800, 1000, 1200, 1400, 1600}, seedQ)
 	g := sk["greedy"]
-	if want := (4*quantile([]float64{800, 1000, 1200, 1400}, seedQ) + 3*all) / 7; !near(g.Theta, want, 0.01) {
+	if want := (4*quantile([]float64{800, 1000, 1200, 1400}, seedQ) + seedPull*all) / (4 + seedPull); !near(g.Theta, want, 0.01) {
 		t.Errorf("greedy θ %.1f, want %.1f", g.Theta, want)
 	}
-	if !near(g.Sigma, 350/math.Sqrt(1+4.0/3), 0.01) || sk["graphs"].Sigma <= g.Sigma {
+	if !near(g.Sigma, 350/math.Sqrt(1+4.0/seedPull), 0.01) || sk["graphs"].Sigma <= g.Sigma {
 		t.Errorf("σ greedy %.0f graphs %.0f: more solves, narrower", g.Sigma, sk["graphs"].Sigma)
 	}
 	if h := sk["heap"]; h.Theta != all || h.Sigma != 350 || !h.Last.IsZero() || h.memory(t2) != 0 {

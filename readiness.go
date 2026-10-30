@@ -71,6 +71,7 @@ const (
 	drillP            = 0.60
 	mcDraws           = 2000
 	seedQ             = 0.85   // the upper quantile of solved ratings a pattern's θ starts at
+	seedPull          = 8.0    // how many solves' worth the prior counts: 2 hard tree solves mustn't read as 1700
 	z80               = 1.2816 // the 10th/90th percentile of a normal: an 80% interval
 	q400              = math.Ln10 / 400
 )
@@ -265,8 +266,8 @@ func (s *State) skills(cat map[string]Problem) map[string]*skill {
 			for i, x := range xs {
 				ds[i] = x.d
 			}
-			k.Theta = (n*quantile(ds, seedQ) + 3*prior) / (n + 3)
-			k.Sigma = max(100, 350/math.Sqrt(1+n/3))
+			k.Theta = (n*quantile(ds, seedQ) + seedPull*prior) / (n + seedPull)
+			k.Sigma = max(100, 350/math.Sqrt(1+n/seedPull))
 			slices.SortFunc(xs, func(a, b solve) int { return a.at.Compare(b.at) })
 			for _, x := range xs {
 				k.succeed(x.at)
