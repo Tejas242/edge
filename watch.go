@@ -264,14 +264,14 @@ func (x *sensor) runInotify(root string) {
 	}
 	defer syscall.Close(fd)
 	dirs := map[int32]string{}
-	add := func(top string) {
+	add := func(top string, fresh bool) {
 		filepath.WalkDir(top, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
 			if !d.IsDir() {
-				if p != top {
-					x.fileEvent(p, true) // made before its dir was watched
+				if fresh {
+					x.fileEvent(p, true) // made in a new dir before its watch was up
 				}
 				return nil
 			}
@@ -285,7 +285,7 @@ func (x *sensor) runInotify(root string) {
 		})
 	}
 	os.MkdirAll(root, 0o755)
-	add(root)
+	add(root, false)
 	if len(dirs) == 0 {
 		log.Println("inotify: can't watch", root)
 		return
@@ -330,7 +330,7 @@ func (x *sensor) runInotify(root string) {
 			case !ok || name == "":
 			case ev.Mask&syscall.IN_ISDIR != 0:
 				if ev.Mask&(syscall.IN_CREATE|syscall.IN_MOVED_TO) != 0 && !strings.HasPrefix(name, ".") {
-					add(filepath.Join(dir, name))
+					add(filepath.Join(dir, name), true)
 				}
 			default:
 				x.fileEvent(filepath.Join(dir, name), ev.Mask&(syscall.IN_DELETE|syscall.IN_MOVED_FROM) == 0)

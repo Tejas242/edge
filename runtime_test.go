@@ -147,9 +147,17 @@ func TestSensorCachesTerminalCwd(t *testing.T) {
 // inotify sees the problem file arrive and saves to it; a fresh save is work.
 func TestSensorWatchesWorkspace(t *testing.T) {
 	ws := t.TempDir()
+	old := filepath.Join(ws, "codeforces", "1", "A.cpp")
+	os.MkdirAll(filepath.Dir(old), 0o755)
+	os.WriteFile(old, nil, 0o644)
+	hour := time.Now().Add(-time.Hour)
+	os.Chtimes(old, hour, hour)
 	x := newSensor()
 	go x.runInotify(ws)
 	waitFor(t, func() bool { x.mu.Lock(); defer x.mu.Unlock(); return x.inoUp })
+	if at, ok := x.fileTime(old); !ok || time.Since(at) < 59*time.Minute {
+		t.Fatalf("a file that was already there isn't a fresh edit: %v", at)
+	}
 	sol := filepath.Join(ws, "codeforces", "2277", "C.cpp")
 	if _, ok := x.fileTime(sol); ok {
 		t.Fatal("no file yet")
