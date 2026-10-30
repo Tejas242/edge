@@ -519,7 +519,7 @@ func emberCardFor(e event) emberCard {
 	mood := map[string]string{"offer": "work", "hint": "nudge", "cold": "nudge", "giveup": "nudge", "drift": "nudge",
 		"late": "error", "ac": "happy", "fail": "error", "lapsed": "nudge",
 		"roundeve": "work", "roundsoon": "work", "roundlate": "nudge", "rounddrift": "nudge", "roundover": "happy",
-		"roundmissed": "nudge", "rated": "happy"}[e.slot()]
+		"roundmissed": "nudge", "rated": "happy", "cue": "work", "cuenudge": "nudge"}[e.slot()]
 	if mood == "" {
 		mood = "idle"
 	}

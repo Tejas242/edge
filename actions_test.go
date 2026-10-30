@@ -36,7 +36,7 @@ func TestEveryActionKeyIsHandled(t *testing.T) {
 	for _, k := range ActionKeys {
 		t.Run(k, func(t *testing.T) {
 			actState(t)
-			key := strings.NewReplacer("<id>", "cf:2257C", "<round>", "cf:2272").Replace(k)
+			key := strings.NewReplacer("<id>", "cf:2257C", "<round>", "cf:2272", "<HH:MM>", "21:30").Replace(k)
 			if strings.HasPrefix(key, "undo:") {
 				if _, err := act("skipround:cf:2272"); err != nil {
 					t.Fatal(err)

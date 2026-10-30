@@ -22,6 +22,7 @@ var ActionKeys = []string{
 	"explain", "explain:<id>", "debrief", "debrief:<round>",
 	"snooze", "rest", "keep",
 	"register:<round>", "openround:<round>", "skipround:<round>", "undo:skipround:<round>",
+	"cue:now", "cue:<HH:MM>", "skiptonight", // Trial 1 (consistency.go)
 }
 
 // skipWithin: a new problem can be skipped from Ember until this much work.

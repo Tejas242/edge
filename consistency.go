@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -237,27 +238,244 @@ func consistencyStatus(s *State, st *emberStatus) {
 	}
 	cs := s.chain()
 	st.RepDone, st.Chain, st.Missed, st.SkipTokens = cs.RepDone, cs.Chain, cs.Missed, s.tokensLeft(n)
+	if !cs.RepDone && !cs.Token {
+		d := day(n)
+		st.CueMs = cueAt(s.Cons.rec(dateKey(d)), d).UnixMilli()
+	}
 }
 
 // consistencyAction handles Trial 1's action keys (cue:…, skiptonight …);
 // handled=false leaves the key to others.
 func consistencyAction(s *State, verb, arg string) (handled bool, msg string, err error) {
-	return false, "", nil
+	if verb != "cue" && (verb != "skiptonight" || arg != "") {
+		return false, "", nil
+	}
+	n := now()
+	if !s.consOn(n) {
+		return true, "", fmt.Errorf("the evening rep starts with Trial 1, on %s", trialDay(cfg().Trial1).Format("Mon 2 Jan"))
+	}
+	d := day(n)
+	r := s.Cons.day(dateKey(d), s.phase(n))
+	cs := s.chain()
+	if cs.RepDone {
+		return true, "", errors.New("tonight's rep is already done")
+	}
+	if verb == "cue" {
+		at := n
+		if arg != "now" {
+			t, ok := hhmm(d, arg)
+			if !ok {
+				return true, "", fmt.Errorf("unknown action %q", "cue:"+arg)
+			}
+			at = later(t, n)
+		}
+		r.CueSet, r.CueAt, r.TokenAt = true, at, time.Time{}
+		s.Cons.Tokens = slices.DeleteFunc(s.Cons.Tokens, func(x string) bool { return x == r.Date }) // a time picked takes the night back
+		logEvent("cue_set", map[string]any{"date": r.Date, "cue": at.Format("15:04"), "now": arg == "now", "phase": r.Phase})
+		if arg == "now" {
+			return true, "Tonight's rep: now", nil
+		}
+		return true, "Tonight's rep at " + at.Format("15:04"), nil
+	}
+	switch {
+	case cs.Token:
+		return true, "Tonight is already off", nil
+	case !r.StartAt.IsZero():
+		return true, "", errors.New("tonight's rep has already started")
+	case s.tokensLeft(n) == 0:
+		return true, "", errors.New("no skips left this week; one comes back on Monday")
+	case !skipOpen(r, d, n):
+		return true, "", errors.New("skips are for before the cue, and tonight's has passed")
+	}
+	r.TokenAt = n
+	s.Cons.Tokens = append(s.Cons.Tokens, r.Date)
+	if len(s.Cons.Tokens) > consKeep {
+		s.Cons.Tokens = slices.Clone(s.Cons.Tokens[len(s.Cons.Tokens)-consKeep:])
+	}
+	s.Snooze = d.AddDate(0, 0, 1).Add(cfg().DayEnds) // no offers tonight either
+	logEvent("token_used", map[string]any{"date": r.Date, "left": s.tokensLeft(n), "phase": r.Phase})
+	return true, "Tonight's off. The chain waits for tomorrow.", nil
+}
+
+// skipOpen: a token can still be used tonight. It's for before the cue; when
+// the card came after the default had passed, its own 15 minutes count too.
+func skipOpen(r *ConsDay, d, n time.Time) bool {
+	if n.Before(cueAt(r, d)) {
+		return true
+	}
+	return !r.CueSet && r.UnlockAt.After(defaultCue(d)) && n.Sub(cueAt(r, d)) < cueNudgeAfter
+}
+
+// later is t, or n when t has passed.
+func later(t, n time.Time) time.Time {
+	if t.Before(n) {
+		return n
+	}
+	return t
 }
 
 // consistencyEvents keeps the day's record in every phase and, in the trial
 // phases, says Trial 1's cards.
 func consistencyEvents(s *State, w window, n time.Time) []event {
 	c := &s.Cons
+	unlock, moved := consActivity(s, w, n)
 	ph := s.phase(n)
-	r := c.day(dateKey(day(n)), ph)
+	d := day(n)
+	r := c.day(dateKey(d), ph)
 	cs := s.chain()
 	s.latch(r, cs, n)
 	if c.Chain > 0 && cs.Chain == 0 {
 		logEvent("chain_break", map[string]any{"was": c.Chain, "phase": ph})
 	}
 	c.Chain = cs.Chain
-	return nil
+	if unlock && afterOffice(n) && r.UnlockAt.IsZero() {
+		r.UnlockAt = n
+		consRT.unlockMoved = moved
+	}
+	if moved && !r.UnlockAt.IsZero() {
+		consRT.unlockMoved = true
+	}
+	if k := "cue:" + r.Date; r.CardAt.IsZero() && !s.Said[k].IsZero() {
+		r.CardAt = s.Said[k]
+		logEvent("cue_shown", map[string]any{"date": r.Date, "late": r.CardAt.After(defaultCue(d)), "phase": ph})
+	}
+	if k := "cuenudge:" + r.Date; !r.Nudged && !s.Said[k].IsZero() {
+		r.Nudged = true
+	}
+	if !s.consOn(n) || s.liveHeld() != nil {
+		return nil
+	}
+	if cs.RepDone || cs.Token || !r.StartAt.IsZero() {
+		return nil // tonight is settled: nothing to ask
+	}
+	var evs []event
+	waiting := !r.UnlockAt.IsZero() && r.CardAt.IsZero() && n.Sub(r.UnlockAt) < cueCardFor
+	if waiting && (consRT.unlockMoved || n.Sub(r.UnlockAt) >= time.Minute) {
+		evs = append(evs, cueCard(s, r, cs, d, n))
+	}
+	// the nudge only to someone at the screen: away, the unlock's card asks instead
+	present := !consRT.activeAt.IsZero() && n.Sub(consRT.activeAt) < seenEvery
+	if cue := cueAt(r, d); !waiting && present && n.Sub(cue) >= cueNudgeAfter && n.Sub(cue) < cueNudgeUntil {
+		evs = append(evs, nudgeCard(s, r, cs))
+	}
+	return evs
+}
+
+// consRT is what the daemon knows between steps and needn't keep: the last
+// step, the window then, and the last activity.
+var consRT struct {
+	at          time.Time // the last step (wall clock)
+	win         window
+	activeAt    time.Time
+	unlockMoved bool // since today's unlock, the screen moved: he's past the lock screen
+}
+
+// consActivity reads activity from what the sensor already sees, with no
+// polling of its own: the focused window or its title changed, work was
+// counted, or the wall clock jumped between steps (a resume: the daemon
+// can't step while the laptop sleeps). unlock is the first activity after
+// idleGap without any; moved says it came from the screen, not a resume
+// alone (whose lock screen may still be up).
+func consActivity(s *State, w window, n time.Time) (unlock, moved bool) {
+	c := &s.Cons
+	last := consRT.activeAt
+	if last.IsZero() {
+		last = c.SeenAt // the daemon (re)started
+	}
+	prev := consRT.at
+	if prev.IsZero() {
+		prev = c.SeenAt
+	}
+	resumed := prev.IsZero() || n.Sub(prev) >= idleGap
+	moved = !consRT.at.IsZero() && w != consRT.win
+	working := s.Current != nil && !s.Current.WorkAt.IsZero() && n.Sub(s.Current.WorkAt) < time.Minute
+	consRT.at, consRT.win = n, w
+	if !resumed && !moved && !working {
+		return false, false
+	}
+	unlock = last.IsZero() || n.Sub(last) >= idleGap
+	consRT.activeAt = n
+	if n.Sub(c.SeenAt) >= seenEvery {
+		c.SeenAt = n
+	}
+	return unlock, moved || working
+}
+
+// afterOffice: the evening cue may ask now. Weekdays after office_until,
+// weekends from weekend_from (10:00).
+func afterOffice(n time.Time) bool {
+	from := cfg().OfficeUntil
+	if weekend(n) {
+		from = cfg().WeekendFrom
+	}
+	return n.Sub(day(n)) >= from
+}
+
+// repLabel names tonight's rep: the problem, and its pattern once Trial 2
+// knows it.
+func repLabel(s *State) string {
+	t := s.Current
+	if t == nil {
+		return "one problem"
+	}
+	l := short(t)
+	var st emberStatus
+	readinessStatus(s, &st)
+	if st.Pattern != "" {
+		l += " · " + st.Pattern
+	}
+	return l
+}
+
+// cueCard is the one "When?" card a day, at the first unlock after office.
+func cueCard(s *State, r *ConsDay, cs chainState, d, n time.Time) event {
+	body := cueLine(s, cs, d, n) + "\nWhen?"
+	chips := []action{{"cue:now", "Now"}}
+	var times []time.Time
+	for _, t := range []time.Time{defaultCue(d), defaultCue(d).Add(90 * time.Minute)} {
+		if t.After(n.Add(5 * time.Minute)) {
+			times = append(times, t)
+		}
+	}
+	if len(times) == 0 { // past the default: Now leads, and one later choice
+		times = append(times, n.Add(90*time.Minute).Truncate(15*time.Minute).Add(15*time.Minute))
+	}
+	for _, t := range times {
+		chips = append(chips, action{"cue:" + t.Format("15:04"), t.Format("15:04")})
+	}
+	if left := s.tokensLeft(n); left > 0 {
+		chips = append(chips, action{"skiptonight", fmt.Sprintf("Skip (%d left)", left)})
+	}
+	return event{Key: "cue:" + r.Date, Title: "Tonight's rep: " + repLabel(s), Body: body, Chips: chips}
+}
+
+// cueLine is the card's line about the chain, in plain words and no guilt.
+func cueLine(s *State, cs chainState, d, n time.Time) string {
+	switch {
+	case cs.Missed == 1:
+		return "Yesterday slipped. Tonight keeps the chain. A 20-minute rep counts."
+	case cs.Chain > 0:
+		return fmt.Sprintf("Chain %d. One rep keeps it growing.", cs.Chain)
+	case d.Equal(trialDay(cfg().Trial1)):
+		return "Trial 1 starts tonight. One rep starts the chain."
+	case d.Day() == 1:
+		return "New month, new chain. One rep starts it."
+	case d.Weekday() == time.Monday:
+		return "New week, new chain. One rep starts it."
+	}
+	return "One rep tonight starts a new chain."
+}
+
+// nudgeCard is the one gentle card when the rep hasn't started 15 minutes
+// after the cue. Nothing more that evening.
+func nudgeCard(s *State, r *ConsDay, cs chainState) event {
+	start := action{"next", "Start"}
+	if t := s.Current; t != nil {
+		start.Key = "start:" + t.ID
+	}
+	return event{Key: "cuenudge:" + r.Date, Title: "Ready when you are",
+		Body:    fmt.Sprintf("Tonight's rep: %s\n%d focused minutes, a submit or an AC counts.", repLabel(s), int(cs.Bar.Minutes())),
+		Actions: []action{start}}
 }
 
 // latch writes what today already proved into its record: the rep (once,
@@ -325,16 +543,23 @@ func defaultCue(d time.Time) time.Time {
 	return d.Add(cfg().CueWeekday)
 }
 
-// cueAt is the day's cue: the time he picked; else, when the card came after
-// the default had passed, the card's time ("Now" was the default); else the
-// default.
+// cueAt is the day's cue: the time he picked; else, when the unlock came
+// after the default had passed, the unlock ("Now" was the default; the card
+// itself if it reached him much later); else the default.
 func cueAt(r *ConsDay, d time.Time) time.Time {
 	if r != nil && r.CueSet {
 		return r.CueAt
 	}
 	base := defaultCue(d)
-	if r != nil && r.CardAt.After(base) {
-		return r.CardAt
+	if r == nil || r.UnlockAt.IsZero() {
+		return base
+	}
+	at := r.UnlockAt
+	if r.CardAt.Sub(at) >= 5*time.Minute {
+		at = r.CardAt
+	}
+	if at.After(base) {
+		return at
 	}
 	return base
 }
@@ -354,5 +579,3 @@ func hhmm(d time.Time, s string) (time.Time, bool) {
 	}
 	return d.Add(off), true
 }
-
-var _ = fmt.Sprint
