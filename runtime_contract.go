@@ -98,7 +98,7 @@ func runtimeStatus(s *State, st *emberStatus) {
 func statusKey(st emberStatus) (key []byte, anchorMs int64) {
 	if st.Working {
 		anchorMs = st.AsOfMs - int64(st.WorkSec)*1000
-		st.WorkSec = 0
+		st.WorkSec, st.DeadlineMs = 0, 0 // the countdown's end moves with the anchor
 	}
 	st.AsOfMs, st.SeenMs = 0, 0
 	key, _ = json.Marshal(st)

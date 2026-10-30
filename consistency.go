@@ -242,6 +242,27 @@ func consistencyStatus(s *State, st *emberStatus) {
 		d := day(n)
 		st.CueMs = cueAt(s.Cons.rec(dateKey(d)), d).UnixMilli()
 	}
+	st.DeadlineMs = repDeadline(s, st.Working, n)
+}
+
+// repDeadline is the interview countdown on a started task: when its first
+// 45 focused minutes run out. While work is counted it ends at now plus
+// what's left; otherwise it's frozen at the last work plus what's left
+// (deadline − asOf stays the time left). Past 45 minutes there's none: the
+// task goes on, nothing ends. A live round has its own clock.
+func repDeadline(s *State, working bool, n time.Time) int64 {
+	t := s.Current
+	if t == nil || !t.Active() || t.Worked() >= repClock || s.liveHeld() != nil {
+		return 0
+	}
+	asOf := n
+	if !working {
+		asOf = t.Started
+		if t.WorkAt.After(asOf) {
+			asOf = t.WorkAt
+		}
+	}
+	return asOf.Add(repClock - t.Worked()).UnixMilli()
 }
 
 // consistencyAction handles Trial 1's action keys (cue:…, skiptonight …);

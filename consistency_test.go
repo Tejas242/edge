@@ -448,3 +448,41 @@ func TestCueQuietInALiveRound(t *testing.T) {
 		}
 	}
 }
+
+// The interview countdown: a started task in the trials ends its first 45
+// focused minutes at DeadlineMs. Working, it's now plus what's left and
+// doesn't make the status worth pushing on its own; paused, it's frozen
+// (deadline − asOf = time left). Past 45 minutes, and in the baseline, none.
+func TestInterviewCountdown(t *testing.T) {
+	s := consState(t, nov(9, 20, 30))
+	pending(s)
+	begin(s, s.Current, nov(9, 20, 0))
+	s.Current.addWork(nov(9, 20, 30), 1200) // 20 min in
+	s.Current.WorkAt = nov(9, 20, 30)
+	st := edgeStatus(s)
+	if !st.Working || st.DeadlineMs != nov(9, 20, 55).UnixMilli() {
+		t.Fatalf("working: %v %v", st.Working, time.UnixMilli(st.DeadlineMs))
+	}
+	at(t, nov(9, 20, 30).Add(20*time.Second)) // 20 s more work: the same countdown
+	s.Current.addWork(now(), 20)
+	s.Current.WorkAt = now()
+	st2 := edgeStatus(s)
+	if k, _ := statusKey(st2); st2.DeadlineMs != st.DeadlineMs || strings.Contains(string(k), "deadlineMs") {
+		t.Fatalf("a running countdown is the clock's anchor, not a change: %s", k)
+	}
+	at(t, nov(9, 21, 30)) // away for an hour: frozen
+	st = edgeStatus(s)
+	if st.Working || st.DeadlineMs-st.AsOfMs != (24*time.Minute+40*time.Second).Milliseconds() {
+		t.Fatalf("paused: working %v left %v", st.Working, time.Duration(st.DeadlineMs-st.AsOfMs)*time.Millisecond)
+	}
+	s.Current.addWork(now(), 25*60)
+	if st := edgeStatus(s); st.DeadlineMs != 0 {
+		t.Fatal("past 45 minutes: no countdown")
+	}
+	s = consState(t, nov(4, 20, 30))
+	pending(s)
+	begin(s, s.Current, nov(4, 20, 0))
+	if st := edgeStatus(s); st.DeadlineMs != 0 {
+		t.Fatal("baseline: no countdown")
+	}
+}
