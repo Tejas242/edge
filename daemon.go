@@ -24,7 +24,8 @@ type event struct {
 	Body    string
 	Urgent  bool
 	Actions []action
-	Detail  string // for the journal only (a raw error), never shown
+	Chips   []action // small choice chips under the body (Ember v2.1); notify-send doesn't show them
+	Detail  string   // for the journal only (a raw error), never shown
 }
 
 // slot groups events so a newer one replaces the older on screen.
@@ -236,6 +237,10 @@ func plan(s *State, w window, dt time.Duration) []event {
 	date := day(n).Format("2006-01-02")
 	got, need := s.today()
 	var evs []event
+	// the trials' own cards (cue, never-miss-twice, drill, mistakes); each
+	// checks its phase and stays quiet during a live round itself
+	evs = append(evs, consistencyEvents(s, w, n)...)
+	evs = append(evs, readinessEvents(s, w, n)...)
 
 	// in a live round: the round and edge's health, nothing else
 	live := s.liveHeld()

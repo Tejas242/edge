@@ -27,6 +27,7 @@ type emberCard struct {
 	Title   string        `json:"title"`
 	Body    string        `json:"body,omitempty"`
 	Buttons []emberButton `json:"buttons,omitempty"`
+	Chips   []emberButton `json:"chips,omitempty"` // Ember v2.1: choice chips
 	Urgent  bool          `json:"urgent,omitempty"`
 	Bounce  bool          `json:"bounce,omitempty"`
 	TTL     int           `json:"ttl_s,omitempty"` // seconds its buttons stay valid (cards with buttons)
@@ -536,7 +537,10 @@ func emberCardFor(e event) emberCard {
 		}
 	}
 	c.Buttons = append(c.Buttons, lead...)
-	if len(c.Buttons) > 0 {
+	for _, a := range e.Chips {
+		c.Chips = append(c.Chips, emberButton{Key: a.Key, Label: a.Label})
+	}
+	if len(c.Buttons) > 0 || len(c.Chips) > 0 {
 		c.TTL = cardTTL[c.ID]
 		if c.TTL == 0 {
 			c.TTL = 600

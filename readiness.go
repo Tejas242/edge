@@ -1,5 +1,7 @@
 package main
 
+import "time"
+
 // Readiness is the Trial 2 model: per-pattern skill and memory, the drill and
 // the mistake log. v2/readiness owns this file.
 type Readiness struct{}
@@ -17,3 +19,6 @@ func readinessStatus(s *State, st *emberStatus) {}
 func readinessAction(s *State, verb, arg string) (handled bool, msg string, err error) {
 	return false, "", nil
 }
+
+// readinessEvents are this trial's cards for plan(): it checks its own phase.
+func readinessEvents(s *State, w window, n time.Time) []event { return nil }

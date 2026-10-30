@@ -1,5 +1,7 @@
 package main
 
+import "time"
+
 // Consistency is the Trial 1 state: tonight's cue, reps, the chain and skip
 // tokens. v2/consistency owns this file.
 type Consistency struct{}
@@ -17,3 +19,6 @@ func consistencyStatus(s *State, st *emberStatus) {}
 func consistencyAction(s *State, verb, arg string) (handled bool, msg string, err error) {
 	return false, "", nil
 }
+
+// consistencyEvents are this trial's cards for plan(): it checks its own phase.
+func consistencyEvents(s *State, w window, n time.Time) []event { return nil }
