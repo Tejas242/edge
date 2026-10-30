@@ -51,11 +51,13 @@ type Config struct {
 	UpsolveN    int      // [contests] upsolve: problems past your last solve that become upsolves
 	UpsolveDays int      // [contests] upsolve_days: an upsolve not done by then lapses
 
-	Trial1, Trial2 time.Time     // [trials] trial1, trial2: the days each trial starts
-	CueWeekday     time.Duration // [trials] cue_weekday: tonight's default rep time, Mon-Fri
-	CueWeekend     time.Duration // [trials] cue_weekend: same, Sat-Sun
-	OfficeUntil    time.Duration // [trials] office_until: weekdays, the evening cue waits until after this
-	SkipTokens     int           // [trials] skip_tokens: skip-tonight tokens a week (Mon-Sun)
+	Trial1, Trial2 time.Time          // [trials] trial1, trial2: the days each trial starts
+	CueWeekday     time.Duration      // [trials] cue_weekday: tonight's default rep time, Mon-Fri
+	CueWeekend     time.Duration      // [trials] cue_weekend: same, Sat-Sun
+	OfficeUntil    time.Duration      // [trials] office_until: weekdays, the evening cue waits until after this
+	SkipTokens     int                // [trials] skip_tokens: skip-tonight tokens a week (Mon-Sun)
+	Patterns       map[string]float64 // [patterns] Trial 2's weight per interview pattern; unset = 1
+	Interview      int                // [readiness] interview_rating, Codeforces scale; 0 = 1400
 }
 
 func defaultConfig() *Config {
@@ -157,6 +159,17 @@ segment-tree           = 1
 monotonic-stack        = 1
 sliding-window         = 1
 heap-priority-queue    = 1
+
+# Trial 2 (from 20 Nov): how much each interview pattern counts towards
+# readiness, and how hard an interview problem is on the Codeforces scale.
+# Every pattern counts 1 unless set here: two-pointers, sliding-window,
+# binary-search, prefix-sums, hashing, stack, heap, intervals, greedy, graphs,
+# shortest-paths, dsu, trees, topo-sort, dp-1d, dp-2d, backtracking.
+[patterns]
+# graphs = 2
+
+[readiness]
+# interview_rating = 1400  # LeetCode ~1800: an upper medium, where onsites sit
 
 [hints]
 ladder_min = [20, 35, 50]  # minutes of work before hint 1, 2, 3 unlock (ladder style)
@@ -289,6 +302,12 @@ func parseConfig(path string) (*Config, []string) {
 				return
 			}
 			set(time.Duration(a)*time.Hour + time.Duration(b)*time.Minute)
+		}
+		if section == "patterns" || section == "readiness" { // Trial 2 (readiness.go)
+			if !readyConfig(c, section, k, str) {
+				fail()
+			}
+			continue
 		}
 		if src, ok := strings.CutPrefix(section, "focus."); ok {
 			w, err := strconv.ParseFloat(str, 64)

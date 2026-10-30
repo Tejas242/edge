@@ -62,3 +62,19 @@ Added by fix/core (fields only): `emberCard.ttl_s`; `Task.work_days` (work by ed
   success_at, revert_below, reverted, verdict {reps, days, reverted, at}.
 - State: `consistency` {days (per-day records, 60 kept), tokens, seen_at, chain, verdict, reverted}.
 - Event log: cue_shown, cue_set, rep, chain_break, token_used, trial_end.
+
+### v2.1 additions by v2/readiness (Trial 2; fields only)
+
+- Stats `readiness` (in shadow from now; Ember shows it from trial2): `model` (version), `interview_rating` (CF
+  scale, default 1400), `lc_offset` (400: zerotrac − 400 = CF scale), `r`/`lo`/`hi` (readiness and its 80%
+  interval, 0..1), `target` (0.75), `patterns[]` {id, name, weight, theta, sigma, p, r, ready = p·r, lo, hi (bound
+  p·r), solved, last (date), half_life_days}, `pick` {task, pattern, p, why} while the current task is Trial 2's
+  pick, `mistakes` {total, all, last_30d, top}, `drills[]` {week, task, pattern, rating, p, result: pending | ac |
+  missed}, `brier`.
+- Status from trial2: `pattern` is the pattern's display name ("Graphs BFS/DFS"); `drill`; `readyPct/Lo/Hi`.
+  For a drill, `deadlineMs` is set here when v2/consistency left it 0.
+- Task kind `drill` (cold, no hints, can't be skipped). Keys: `mistake:<id>:<kind>` (kind: misread | edge |
+  overflow | approach | bug), `drill` (start the drill now; opens it like start), `drill:later`.
+- Cards: the mistake card has the fail card's id (`fail`) and replaces it, with 5 chips (and the hint buttons when
+  due); the drill card is `drill`, chips Start · In 30 min.
+- Config: `[patterns]` <id> = weight (default 1), `[readiness] interview_rating`.

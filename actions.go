@@ -23,6 +23,7 @@ var ActionKeys = []string{
 	"snooze", "rest", "keep",
 	"register:<round>", "openround:<round>", "skipround:<round>", "undo:skipround:<round>",
 	"cue:now", "cue:<HH:MM>", "skiptonight", // Trial 1 (consistency.go)
+	"mistake:<id>:<kind>", "drill", "drill:later", // Trial 2 (readiness.go)
 }
 
 // skipWithin: a new problem can be skipped from Ember until this much work.
@@ -312,6 +313,9 @@ func act(key string) (string, error) {
 				return err
 			}
 			msg = m
+			if t := s.Current; verb == "drill" && arg == "" && t != nil && t.Kind == "drill" {
+				work(t) // the drill opens like any start
+			}
 		}
 		st = edgeStatus(s)
 		return nil
