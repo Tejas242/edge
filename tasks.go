@@ -190,7 +190,7 @@ func begin(s *State, t *Task, at time.Time) {
 
 func describe(s *State, t *Task) string {
 	var b strings.Builder
-	label := map[string]string{"new": "NEW", "resolve": "COLD RE-SOLVE", "reentry": "WARM-UP (welcome back)", "upsolve": "UPSOLVE " + t.RoundName}[t.Kind]
+	label := map[string]string{"new": "NEW", "resolve": "COLD RE-SOLVE", "reentry": "WARM-UP (welcome back)", "upsolve": "UPSOLVE " + t.RoundName, "drill": "DRILL (interview, 45 min, no hints)"}[t.Kind]
 	fmt.Fprintf(&b, "%s  %s\n  %s\n  rating %d", label, t.Title, t.URL, t.Rating)
 	switch t.Kind {
 	case "new":

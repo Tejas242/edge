@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -572,13 +573,247 @@ func readinessStatus(s *State, st *emberStatus) {
 // drill (start the drill now) and drill:later. handled=false leaves the key
 // to others.
 func readinessAction(s *State, verb, arg string) (handled bool, msg string, err error) {
+	switch {
+	case verb == "mistake":
+		id, kind, ok := cutLast(arg)
+		if !ok {
+			return false, "", nil
+		}
+		return true, "", s.noteMistake(id, kind)
+	case verb == "drill" && arg == "":
+		msg, err := s.startDrill()
+		return true, msg, err
+	case verb == "drill" && arg == "later":
+		s.Ready.DrillLater = now().Add(30 * time.Minute)
+		return true, "The drill asks again in 30 minutes", nil
+	}
 	return false, "", nil
+}
+
+func cutLast(s string) (before, after string, ok bool) {
+	i := strings.LastIndex(s, ":")
+	if i < 0 {
+		return "", "", false
+	}
+	return s[:i], s[i+1:], true
+}
+
+// noteMistake records what a rejected verdict was. It names the task's
+// latest rejection; answering again changes the answer.
+func (s *State) noteMistake(id, kind string) error {
+	label := ""
+	for _, k := range mistakeKinds {
+		if k.Key == kind {
+			label = k.Label
+		}
+	}
+	if label == "" {
+		return fmt.Errorf("%q isn't one of misread, edge, overflow, approach, bug", kind)
+	}
+	var t *Task
+	if c := s.Current; c != nil && c.ID == id {
+		t = c
+	}
+	for i := len(s.History) - 1; t == nil && i >= 0; i-- {
+		if h := &s.History[i]; h.ID == id && now().Sub(h.Finished) < 24*time.Hour {
+			t = h
+		}
+	}
+	if t == nil || t.Fails == 0 {
+		return fmt.Errorf("%s has no rejected verdict to note", shortID(id))
+	}
+	x := Mistake{At: now(), Task: id, Fail: t.Fails, Verdict: t.Verdict, Kind: kind}
+	if n := len(s.Ready.Mistakes); n > 0 && s.Ready.Mistakes[n-1].Task == id && s.Ready.Mistakes[n-1].Fail == t.Fails {
+		s.Ready.Mistakes[n-1] = x
+	} else {
+		s.Ready.Mistakes = append(s.Ready.Mistakes, x)
+	}
+	if n := len(s.Ready.Mistakes); n > 500 {
+		s.Ready.Mistakes = slices.Delete(s.Ready.Mistakes, 0, n-500)
+	}
+	logEvent("mistake", map[string]any{"task": id, "fail": t.Fails, "kind": kind})
+	return nil
+}
+
+func (s *State) noted(id string, fail int) bool {
+	return slices.ContainsFunc(s.Ready.Mistakes, func(x Mistake) bool { return x.Task == id && x.Fail == fail })
+}
+
+// startDrill makes the drill the current task: a weighted-random pattern,
+// a problem where P ≈ 0.60, picked blind from the cached lists (LeetCode
+// first: it's interview-shaped). An unstarted task goes back where it came
+// from; act() then opens the drill like any start.
+func (s *State) startDrill() (string, error) {
+	if s.phase(now()) != "trial2" {
+		return "", errors.New("drills start with Trial 2")
+	}
+	if t := s.Current; t != nil && t.Active() {
+		return "", fmt.Errorf("finish %s first", short(t))
+	}
+	if s.liveHeld() != nil {
+		return "", errors.New("not during a round")
+	}
+	m := s.model()
+	var all []Problem
+	for _, p := range m.cat {
+		all = append(all, p)
+	}
+	slices.SortFunc(all, func(a, b Problem) int { return strings.Compare(a.ID, b.ID) })
+	var W float64
+	for _, p := range patterns {
+		W += patternWeight(p.ID)
+	}
+	if W <= 0 {
+		return "", errors.New("every pattern's weight is 0")
+	}
+	x := rand.Float64() * W
+	order := make([]string, 0, len(patterns))
+	for _, p := range patterns {
+		if x -= patternWeight(p.ID); x < 0 && len(order) == 0 {
+			order = append(order, p.ID)
+		}
+	}
+	// the drawn pattern first, then the rest by weight if it has no problem
+	order = append(order, sortedPatterns(patternWeight)...)
+	for _, src := range []string{"lc", "cf"} {
+		for _, id := range order {
+			if patternWeight(id) <= 0 {
+				continue
+			}
+			k := m.skill[id]
+			target := k.Theta - pOffset(drillP)
+			var cands []Problem
+			for width := 100.0; width <= 300 && len(cands) == 0; width += 100 {
+				for _, p := range all {
+					d := float64(cfScale(src, p.Rating))
+					if p.ID[:2] != src || d == 0 || math.Abs(d-target) > width || s.offered(p.ID) || !hasPattern(src, p.Tags, id) ||
+						src == "lc" && p.Rating < lcMediumFloor || src == "cf" && (p.Contest < 1300 || slices.Contains(p.Tags, "*special")) {
+						continue
+					}
+					cands = append(cands, p)
+				}
+			}
+			if len(cands) == 0 {
+				continue
+			}
+			p := cands[rand.IntN(len(cands))]
+			putBack(s, day(now()).AddDate(0, 0, 1))
+			d := cfScale(src, p.Rating)
+			pp := round3(solveP(k.Theta, float64(d)))
+			s.Current = &Task{ID: p.ID, Kind: "drill", Title: p.Title, URL: p.URL, Rating: p.Rating, Tags: p.Tags,
+				Policy: "cold", Assigned: now(), Explain: -1}
+			s.Ready.Pick = &readyPick{Task: p.ID, Pattern: id, P: pp, Why: "The weekly drill: one problem, 45 minutes, picked blind."}
+			s.Ready.Drills = append(s.Ready.Drills, Drill{Week: weekStart(now()).Format(time.DateOnly), Task: p.ID, Pattern: id,
+				Rating: d, P: pp, At: now()})
+			archive(s.Current)
+			logEvent("drill", map[string]any{"task": p.ID, "pattern": id, "p": pp})
+			return "Drill: " + short(s.Current) + ", 45 minutes", nil
+		}
+	}
+	return "", errors.New("no problem for a drill in the cached lists yet")
 }
 
 // ---- cards ----
 
 // readinessEvents are this trial's cards for plan(): it checks its own phase.
-func readinessEvents(s *State, w window, n time.Time) []event { return nil }
+func readinessEvents(s *State, w window, n time.Time) []event {
+	noteActivity(w, n)
+	if s.phase(n) != "trial2" || s.liveHeld() != nil {
+		return nil
+	}
+	var evs []event
+	if e := mistakeEvent(s, n); e != nil {
+		evs = append(evs, *e)
+	}
+	if e := s.drillEvent(n); e != nil {
+		evs = append(evs, *e)
+	}
+	return evs
+}
+
+// mistakeEvent asks what the latest rejected verdict was. It shares the
+// fail card's slot, so it takes that card's place (with its hint button):
+// one card, not two. Asked once, right after the verdict; compile errors
+// aren't asked about.
+func mistakeEvent(s *State, n time.Time) *event {
+	t := s.Current
+	if t == nil || t.Fails == 0 || t.Verdict == "" || t.Verdict == "CE" || s.noted(t.ID, t.Fails) {
+		return nil
+	}
+	key := fmt.Sprintf("fail:%s:%d", t.ID, t.Fails)
+	if at, ok := s.Said[key]; ok && n.Sub(at) > 10*time.Minute {
+		return nil // an old verdict: the moment has passed
+	}
+	e := &event{Key: key + ":why", Title: t.Verdict + ". What was it?", Body: t.Title}
+	if lvl, _ := hintAllowance(t); t.Fails >= 2 && lvl > t.Hints {
+		e.Body += fmt.Sprintf("\n%d misses. A hint is available.", t.Fails)
+		e.Actions = []action{{"hint:" + t.ID, "Get hint"}, {"keep", "Keep going"}}
+	}
+	for _, k := range mistakeKinds {
+		e.Chips = append(e.Chips, action{"mistake:" + t.ID + ":" + k.Key, k.Label})
+	}
+	return e
+}
+
+// The drill's moment: a random one in this week's study time, re-rolled to
+// a later day if the day passes without the card. It's offered only while
+// the laptop is in use, nothing is started and no round is on; "In 30 min"
+// brings it back once.
+func (s *State) drillEvent(n time.Time) *event {
+	week := weekStart(n).Format(time.DateOnly)
+	if slices.ContainsFunc(s.Ready.Drills, func(d Drill) bool { return d.Week == week }) {
+		return nil
+	}
+	first := "drill:" + week + ":1"
+	firstAt, offered := s.Said[first]
+	if !offered && (s.Ready.DrillWeek != week || day(n).After(day(s.Ready.DrillAt))) {
+		s.rollDrill(n)
+	}
+	key := first
+	if offered {
+		key = "drill:" + week + ":2"
+		if _, ok := s.Said[key]; ok || !s.Ready.DrillLater.After(firstAt) {
+			return nil
+		}
+	}
+	if !studyTime(n) || n.Before(s.Ready.DrillAt) || n.Before(s.Ready.DrillLater) || n.Before(s.Snooze) ||
+		(s.Current != nil && s.Current.Active()) || !activeWithin(n, 5*time.Minute) {
+		return nil
+	}
+	return &event{Key: key, Title: "Interview now?", Body: "One problem, 45 minutes, picked blind.",
+		Chips: []action{{"drill", "Start"}, {"drill:later", "In 30 min"}}}
+}
+
+// rollDrill picks this week's moment: a random day from today to Sunday,
+// 15 to 165 minutes into its study time.
+func (s *State) rollDrill(n time.Time) {
+	ws, today := weekStart(n), day(n)
+	left := 7 - int(math.Round(today.Sub(ws).Hours()/24))
+	d := today.AddDate(0, 0, rand.IntN(max(1, left)))
+	from := cfg().WeekdayFrom
+	if weekend(d.Add(12 * time.Hour)) {
+		from = cfg().WeekendFrom
+	}
+	s.Ready.DrillWeek = ws.Format(time.DateOnly)
+	s.Ready.DrillAt = d.Add(from + time.Duration(15+rand.IntN(151))*time.Minute)
+}
+
+// The laptop is in use when the focused window changed lately (focus or
+// title): what the sensor already reports each tick, no polling of its own.
+var seenWin struct {
+	w  window
+	at time.Time
+}
+
+func noteActivity(w window, n time.Time) {
+	if w != seenWin.w {
+		seenWin.w, seenWin.at = w, n
+	}
+}
+
+func activeWithin(n time.Time, d time.Duration) bool {
+	return !seenWin.at.IsZero() && (seenWin.w.ID != 0 || seenWin.w.App != "") && n.Sub(seenWin.at) <= d
+}
 
 // sortedPatterns orders pattern ids by f, highest first (stable on the list order).
 func sortedPatterns(f func(id string) float64) []string {
