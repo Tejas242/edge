@@ -153,6 +153,9 @@ func (x *sensor) runNiri() {
 
 func (x *sensor) niriStream() error {
 	cmd := exec.Command("niri", "msg", "-j", "event-stream")
+	// the unit's KillMode=process keeps the windows edge opens alive across a
+	// restart, so the stream must end with edge itself or it leaks one per restart
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
