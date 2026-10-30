@@ -263,6 +263,33 @@ func TestJudgePlan(t *testing.T) {
 	}
 }
 
+func TestLiveJudgingAndVerdict(t *testing.T) {
+	at(t, wed)
+	s := fresh(t)
+	task := pending(s)
+	begin(s, task, wed.Add(-time.Hour))
+	sub := func(v string, passed int, at int64) cfSub {
+		x := cfSub{Verdict: v, Passed: passed, Time: at}
+		x.Problem.ContestID, x.Problem.Index = 2257, "C"
+		return x
+	}
+	base := wed.Unix()
+	processCF(s, task, []cfSub{sub("TESTING", 8, base)})
+	if task.Judging != "test 9" || task.Fails != 0 {
+		t.Fatalf("testing: %q", task.Judging)
+	}
+	task.Judging = ""
+	processCF(s, task, []cfSub{sub("WRONG_ANSWER", 2, base), sub("", 0, base+60)})
+	if task.Verdict != "WA on test 3" || task.Judging != "queue" {
+		t.Fatalf("verdict %q judging %q", task.Verdict, task.Judging)
+	}
+	for in, want := range map[string]string{"WJ": "queue", "3/14": "test 4", "14/14": "test 14", "WA": "", "AC": ""} {
+		if got := acJudging(in); got != want {
+			t.Errorf("acJudging(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // R9: AtCoder's task pages don't say "AtCoder"; the task's own title does it.
 func TestAtCoderTabsCountAsWork(t *testing.T) {
 	task := &Task{ID: "ac:abc400_d", Title: "Takahashi the Wall Breaker"}

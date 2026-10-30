@@ -62,8 +62,14 @@ func trackWork(s *State, w window, dt time.Duration) {
 	}
 }
 
+// judgeNote is the live judging state of the last poll; Task.Judging isn't
+// persisted, so the daemon carries it between ticks.
+type judgeNote struct{ id, text string }
+
+var liveJudge judgeNote
+
 // runtimeStatus fills the status fields the runtime owns: Working, Paused,
-// AsOfMs, WorkSec. AsOfMs moves only while work is counted, so an
+// AsOfMs, WorkSec, Judging. AsOfMs moves only while work is counted, so an
 // idle status stays byte-identical.
 func runtimeStatus(s *State, st *emberStatus) {
 	t := s.Current
@@ -72,6 +78,10 @@ func runtimeStatus(s *State, st *emberStatus) {
 	}
 	st.WorkSec = t.WorkSec
 	st.Working, st.Paused = workState(s, t)
+	st.Judging = t.Judging
+	if t.Verdict != "" {
+		st.LastVerdict = t.Verdict
+	}
 	switch {
 	case st.Working:
 		st.AsOfMs = now().UnixMilli()
