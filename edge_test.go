@@ -18,7 +18,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	for k, v := range map[string]string{"HOME": d, "EDGE_HOME": d + "/data", "EDGE_WORK": d + "/CP", "EDGE_CACHE": d + "/cache", "XDG_CONFIG_HOME": d + "/config"} {
+	for k, v := range map[string]string{"HOME": d, "EDGE_HOME": d + "/data", "EDGE_WORK": d + "/CP", "EDGE_CACHE": d + "/cache", "XDG_CONFIG_HOME": d + "/config", "XDG_RUNTIME_DIR": d + "/run"} {
 		os.Setenv(k, v)
 	}
 	os.MkdirAll(d+"/CP", 0o755)

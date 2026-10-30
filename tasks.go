@@ -332,18 +332,34 @@ func skip(s *State, seen bool, cat *catalog) error {
 }
 
 // shelve puts back a task that was offered on an earlier day and never
-// started, so a fresh one can come: nothing sits pending for days.
+// started, so a fresh one can come: nothing sits pending for days. A new
+// problem is recorded as ignored; a re-solve comes back tomorrow.
+// Upsolves are never shelved (stale says no): they have their own due date.
 func shelve(s *State) {
 	t := s.Current
-	s.Current = nil
-	switch t.Kind {
-	case "new":
+	if t != nil && t.Kind == "new" {
 		t.Outcome, t.Finished = "ignored", now()
 		s.History = append(s.History, *t)
-	case "resolve":
-		s.Probes = append(s.Probes, Probe{Problem: t.ID, Title: t.Title, URL: t.URL, Rating: t.Rating,
-			Due: day(now()).AddDate(0, 0, 1), Stage: t.ProbeStage, Try: t.ProbeTry, Policy: t.Arm})
 	}
+	putBack(s, day(now()).AddDate(0, 0, 1))
+}
+
+// putBack takes the current unstarted task off without a trace in the
+// history and returns it to where it came from: a re-solve goes back to the
+// probes, due at due; an upsolve stays owed on its round; a new problem or a
+// warm-up can simply be picked again. Nothing is lost.
+func putBack(s *State, due time.Time) {
+	t := s.Current
+	if t == nil {
+		return
+	}
+	s.Current = nil
+	s.DriftAt = time.Time{}
+	if t.Kind == "resolve" && !slices.ContainsFunc(s.Probes, func(p Probe) bool { return p.Problem == t.ID }) {
+		s.Probes = append(s.Probes, Probe{Problem: t.ID, Title: t.Title, URL: t.URL, Rating: t.Rating,
+			Due: due, Stage: t.ProbeStage, Try: t.ProbeTry, Policy: t.Arm})
+	}
+	logEvent("abandon", map[string]any{"task": t.ID, "kind": t.Kind, "why": "put back"})
 }
 
 // finish records the task and schedules the cold re-solves that decide

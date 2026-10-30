@@ -75,10 +75,12 @@ func (s *State) wantsAssign() bool {
 	return s.Current == nil || s.stale()
 }
 
-// stale: offered on an earlier day, a few times, never started.
+// stale: offered on an earlier day, a few times, never started. Upsolves
+// never go stale: they keep their round's due date and lapse on it, so
+// shelving one only brought it straight back.
 func (s *State) stale() bool {
 	t := s.Current
-	return t != nil && !t.Active() && t.Offers >= 2 && day(t.Assigned).Before(day(now()))
+	return t != nil && !t.Active() && t.Kind != "upsolve" && t.Offers >= 2 && day(t.Assigned).Before(day(now()))
 }
 
 // step is one daemon tick under the lock: apply what gather fetched, track

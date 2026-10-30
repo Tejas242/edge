@@ -519,8 +519,8 @@ func (s *State) settle(r *Round) {
 		return // an open round they didn't sit owes nothing
 	}
 	s.queueUpsolves(r, from)
-	if t := s.Current; t != nil && !t.Active() && t.Kind == "new" {
-		s.Current = nil // the upsolve goes first; this one comes back another day
+	if t := s.Current; t != nil && !t.Active() && (t.Kind == "new" || t.Kind == "resolve") {
+		putBack(s, now()) // the upsolve goes first; this one comes back after it
 	}
 }
 
@@ -582,15 +582,25 @@ func (s *State) upsolveDone(t *Task) {
 }
 
 // tidyRounds lapses upsolves past their day, unless one is being worked on
-// right now, and forgets old rounds.
+// right now, and forgets old rounds. A current upsolve that lapses before it
+// was started stops being current: due passes, it's lapsed, it isn't
+// startable, and the next tick hands out what's next.
 func (s *State) tidyRounds() {
 	n := now()
 	for i := range s.Rounds {
 		r := &s.Rounds[i]
 		for j := range r.Problems {
 			p := &r.Problems[j]
-			if p.State == "upsolve" && !p.Due.After(n) && !(s.Current != nil && s.Current.ID == p.ID && s.Current.Active()) {
+			cur := s.Current != nil && s.Current.ID == p.ID && s.Current.Round == r.ID
+			if p.State == "upsolve" && !p.Due.After(n) && !(cur && s.Current.Active()) {
 				p.State = "lapsed"
+				if cur {
+					log.Println("lapsed before it was started:", p.ID)
+					putBack(s, n)
+				}
+			}
+			if cur && s.Current != nil && s.Current.Rating == 0 && p.Rating > 0 {
+				s.Current.Rating = p.Rating // CF rates a round's problems after it's assigned
 			}
 		}
 	}
