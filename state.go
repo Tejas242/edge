@@ -15,33 +15,34 @@ import (
 var now = time.Now
 
 type Task struct {
-	ID         string    `json:"id"`   // "cf:1899A", "lc:sum-game" or "ac:abc480_d"
-	Kind       string    `json:"kind"` // new | resolve | reentry | upsolve
-	Title      string    `json:"title"`
-	URL        string    `json:"url"`
-	Rating     int       `json:"rating"`
-	Tags       []string  `json:"tags"`
-	Focus      string    `json:"focus,omitempty"` // the tag this task was picked for; "" = any topic
-	Policy     string    `json:"policy"`          // hint policy: ladder | instant | cold ("" for new until started)
-	Arm        string    `json:"arm"`             // experiment arm this result counts toward
-	Assigned   time.Time `json:"assigned"`
-	Started    time.Time `json:"started"` // zero while assigned but not begun
-	Finished   time.Time `json:"finished,omitempty"`
-	Outcome    string    `json:"outcome,omitempty"` // solo | assisted | gaveup | skipped | ignored
-	Known      bool      `json:"known,omitempty"`   // solved too fast to be new: probably seen before
-	Hints      int       `json:"hints"`
-	Explain    int       `json:"explain"` // explain-back score 0..2, -1 = not done
-	ProbeOf    string    `json:"probe_of,omitempty"`
-	ProbeStage int       `json:"probe_stage,omitempty"`
-	ProbeTry   int       `json:"probe_try,omitempty"`  // 0 = first attempt at this stage
-	Fails      int       `json:"fails"`                // rejected submissions seen
-	WorkSec    int       `json:"work_sec"`             // seconds of real work seen (problem, editor or terminal in focus)
-	DriftSec   int       `json:"drift_sec"`            // seconds on distractions while active
-	Edited     bool      `json:"edited,omitempty"`     // the solution file changed after starting
-	Offers     int       `json:"offers,omitempty"`     // times offered without being started
-	SubSeen    int64     `json:"sub_seen"`             // newest submission time already processed
-	Round      string    `json:"round,omitempty"`      // upsolves: the round it's from
-	RoundName  string    `json:"round_name,omitempty"` // and its short name
+	ID         string         `json:"id"`   // "cf:1899A", "lc:sum-game" or "ac:abc480_d"
+	Kind       string         `json:"kind"` // new | resolve | reentry | upsolve
+	Title      string         `json:"title"`
+	URL        string         `json:"url"`
+	Rating     int            `json:"rating"`
+	Tags       []string       `json:"tags"`
+	Focus      string         `json:"focus,omitempty"` // the tag this task was picked for; "" = any topic
+	Policy     string         `json:"policy"`          // hint policy: ladder | instant | cold ("" for new until started)
+	Arm        string         `json:"arm"`             // experiment arm this result counts toward
+	Assigned   time.Time      `json:"assigned"`
+	Started    time.Time      `json:"started"` // zero while assigned but not begun
+	Finished   time.Time      `json:"finished,omitempty"`
+	Outcome    string         `json:"outcome,omitempty"` // solo | assisted | gaveup | skipped | ignored
+	Known      bool           `json:"known,omitempty"`   // solved too fast to be new: probably seen before
+	Hints      int            `json:"hints"`
+	Explain    int            `json:"explain"` // explain-back score 0..2, -1 = not done
+	ProbeOf    string         `json:"probe_of,omitempty"`
+	ProbeStage int            `json:"probe_stage,omitempty"`
+	ProbeTry   int            `json:"probe_try,omitempty"`  // 0 = first attempt at this stage
+	Fails      int            `json:"fails"`                // rejected submissions seen
+	WorkSec    int            `json:"work_sec"`             // seconds of real work seen (problem, editor or terminal in focus)
+	WorkDays   map[string]int `json:"work_days,omitempty"`  // WorkSec by edge day ("2026-10-30"); add with addWork
+	DriftSec   int            `json:"drift_sec"`            // seconds on distractions while active
+	Edited     bool           `json:"edited,omitempty"`     // the solution file changed after starting
+	Offers     int            `json:"offers,omitempty"`     // times offered without being started
+	SubSeen    int64          `json:"sub_seen"`             // newest submission time already processed
+	Round      string         `json:"round,omitempty"`      // upsolves: the round it's from
+	RoundName  string         `json:"round_name,omitempty"` // and its short name
 
 	Judging string `json:"-"`                 // runtime only: "" | "queue" | "test 9" while a submission is judged
 	Verdict string `json:"verdict,omitempty"` // latest rejected verdict with its test: "WA on test 3"

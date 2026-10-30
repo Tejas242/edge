@@ -32,9 +32,7 @@ func assign(s *State, cat *catalog) (*Task, error) {
 	default:
 		// an upsolve while the round is fresh, before re-solves and new problems
 		if r, p := s.nextUpsolve(); p != nil {
-			*t = Task{ID: p.ID, Kind: "upsolve", Title: p.Title, URL: p.URL, Rating: p.Rating, Policy: "ladder",
-				Round: r.ID, RoundName: r.Short() + " " + p.Index}
-			break
+			return assignUpsolve(s, r, p), nil
 		}
 		if i := s.dueProbe(); i >= 0 {
 			p := s.Probes[i]
@@ -55,6 +53,15 @@ func assign(s *State, cat *catalog) (*Task, error) {
 		archive(t) // the old attempt goes before they can open it; an upsolve picks up the round's
 	}
 	return t, nil
+}
+
+// assignUpsolve makes one round problem the current task, not yet started.
+func assignUpsolve(s *State, r *Round, p *RoundProblem) *Task {
+	t := &Task{ID: p.ID, Kind: "upsolve", Title: p.Title, URL: p.URL, Rating: p.Rating, Policy: "ladder",
+		Round: r.ID, RoundName: r.Short() + " " + p.Index, Assigned: now(), Explain: -1}
+	s.fixed("assign")
+	s.Current = t // no archive: an upsolve picks up the round's own attempt
+	return t
 }
 
 func (s *State) newTask(t *Task, cat *catalog) error {
@@ -95,6 +102,74 @@ func other(src string) string {
 		return "lc"
 	}
 	return "cf"
+}
+
+// addWork counts sec seconds of work on t, on the edge day of at, so
+// today's work is only today's.
+func (t *Task) addWork(at time.Time, sec int) {
+	if sec <= 0 {
+		return
+	}
+	t.WorkSec += sec
+	if t.WorkDays == nil {
+		t.WorkDays = map[string]int{}
+	}
+	t.WorkDays[day(at).Format(time.DateOnly)] += sec
+}
+
+// workByDay spreads t's work over the edge days it was done on. Work from
+// before edge kept days goes to the day it started (or finished).
+func (t *Task) workByDay(f func(d time.Time, sec int)) {
+	rest := t.WorkSec
+	for k, sec := range t.WorkDays {
+		if d, err := time.ParseInLocation(time.DateOnly, k, time.Local); err == nil {
+			f(d, sec)
+			rest -= sec
+		}
+	}
+	if rest > 0 {
+		at := t.Started
+		if at.IsZero() {
+			at = t.Finished
+		}
+		if !at.IsZero() {
+			f(day(at), rest)
+		}
+	}
+}
+
+// eachWork calls f with every stretch of focused work by day: tasks done,
+// the current one, and live rounds sat (a round is focused work).
+func (s *State) eachWork(f func(d time.Time, sec int)) {
+	n := now()
+	for i := range s.History {
+		if t := &s.History[i]; !t.Finished.IsZero() {
+			t.workByDay(f)
+		}
+	}
+	if t := s.Current; t != nil {
+		t.workByDay(f)
+	}
+	for i := range s.Rounds {
+		if r := &s.Rounds[i]; r.Joined == "live" {
+			end := r.End()
+			if n.Before(end) {
+				end = n
+			}
+			f(day(r.creditAt()), int(max(0, end.Sub(r.Start)).Seconds()))
+		}
+	}
+}
+
+// workOn is the focused work done on edge day d.
+func (s *State) workOn(d time.Time) int {
+	sum := 0
+	s.eachWork(func(x time.Time, sec int) {
+		if x.Equal(d) {
+			sum += sec
+		}
+	})
+	return sum
 }
 
 // begin starts the clock. A new problem gets its hint policy now.

@@ -46,7 +46,8 @@ type Round struct {
 	Rating   int            `json:"rating,omitempty"`
 	Delta    int            `json:"delta,omitempty"`
 	Lesson   string         `json:"lesson,omitempty"`
-	Gone     bool           `json:"gone,omitempty"` // dropped from the calendar before it began
+	PlanWas  string         `json:"plan_was,omitempty"` // the plan before "Can't make it", for its undo ("open" = "")
+	Gone     bool           `json:"gone,omitempty"`     // dropped from the calendar before it began
 }
 
 type RoundProblem struct {
@@ -547,18 +548,37 @@ func (s *State) queueUpsolves(r *Round, from int) {
 func (s *State) nextUpsolve() (*Round, *RoundProblem) {
 	n := now()
 	for i := range s.Rounds {
-		r := &s.Rounds[i]
-		for j := range r.Problems {
-			p := &r.Problems[j]
-			if p.State == "upsolve" {
-				if p.Due.After(n) {
-					return r, p
-				}
-				continue // lapsed; tidyRounds marks it
-			}
+		if p := s.Rounds[i].owed(n); p != nil {
+			return &s.Rounds[i], p
 		}
 	}
 	return nil, nil
+}
+
+// owed is the round's next upsolve still open at n, in problem order. One
+// past its due is lapsed (tidyRounds marks it) and skipped.
+func (r *Round) owed(n time.Time) *RoundProblem {
+	for j := range r.Problems {
+		if p := &r.Problems[j]; p.State == "upsolve" && p.Due.After(n) {
+			return p
+		}
+	}
+	return nil
+}
+
+// upsolveOf is the round problem an upsolve task works, if it's still there.
+func (s *State) upsolveOf(t *Task) *RoundProblem {
+	if t == nil || t.Kind != "upsolve" {
+		return nil
+	}
+	if r := s.round(t.Round); r != nil {
+		for j := range r.Problems {
+			if p := &r.Problems[j]; p.ID == t.ID {
+				return p
+			}
+		}
+	}
+	return nil
 }
 
 // upsolveDone records how an upsolve task ended on its round.
@@ -797,9 +817,9 @@ func (s *State) roundEvents(w window, dt time.Duration) []event {
 				if up != "" {
 					body += " Upsolve next: " + up + "."
 				}
-				acts := []action{{"debrief", "Debrief (3 min)"}}
+				acts := []action{{"debrief:" + r.ID, "Debrief (3 min)"}}
 				if up != "" {
-					acts = []action{{"upsolve", "Upsolve now"}, {"debrief", "Debrief (3 min)"}}
+					acts = []action{{"upsolve:" + r.ID, "Upsolve now"}, {"debrief:" + r.ID, "Debrief (3 min)"}}
 				}
 				evs = append(evs, event{Key: "roundover:" + r.ID + ":" + r.Joined, Title: title, Body: body, Actions: acts})
 			case r.Plan != "" && up != "":
@@ -808,7 +828,13 @@ func (s *State) roundEvents(w window, dt time.Duration) []event {
 					body += " Sitting it virtually counts as sitting it."
 				}
 				evs = append(evs, event{Key: "roundmissed:" + r.ID, Title: "You missed " + r.Short(), Body: body,
-					Actions: []action{{"upsolve", "Upsolve now"}}})
+					Actions: []action{{"upsolve:" + r.ID, "Upsolve now"}}})
+			}
+		}
+		for _, p := range r.Problems { // said once, in study time, the day it lapses
+			if p.State == "lapsed" && n.Sub(p.Due) < 24*time.Hour && studyTime(n) {
+				evs = append(evs, event{Key: "lapsed:" + p.ID, Title: r.Short() + " " + p.Index + " lapsed",
+					Body: "Its upsolve window closed on " + p.Due.Add(-time.Minute).Format("Mon") + ". It stays on the round's record as lapsed."})
 			}
 		}
 		if r.Rated && n.Sub(r.End()) < 4*24*time.Hour {

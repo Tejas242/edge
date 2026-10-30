@@ -326,29 +326,16 @@ func (s *State) stats() Stats {
 		return days[d]
 	}
 	for _, t := range s.History {
-		if t.Finished.IsZero() {
-			continue
+		if !t.Finished.IsZero() {
+			at(day(t.Finished)).credits += credit(t)
 		}
-		a := at(day(t.Finished))
-		a.credits += credit(t)
-		a.work += t.WorkSec
 	}
 	for i := range s.Rounds {
 		if r := &s.Rounds[i]; r.Joined != "" {
-			a := at(day(r.creditAt()))
-			a.credits += s.roundCredit(r)
-			if r.Joined == "live" {
-				end := r.End()
-				if n.Before(end) {
-					end = n
-				}
-				a.work += int(max(0, end.Sub(r.Start)).Seconds()) // a round is focused work
-			}
+			at(day(r.creditAt())).credits += s.roundCredit(r)
 		}
 	}
-	if t := s.Current; t != nil && t.WorkSec > 0 {
-		at(today).work += t.WorkSec
-	}
+	s.eachWork(func(d time.Time, sec int) { at(d).work += sec }) // each day's own work only
 	for _, ts := range s.CFDone {
 		at(day(time.Unix(ts, 0))).cf++
 	}

@@ -1,12 +1,11 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,6 +25,7 @@ type event struct {
 	Body    string
 	Urgent  bool
 	Actions []action
+	Detail  string // for the journal only (a raw error), never shown
 }
 
 // slot groups events so a newer one replaces the older on screen.
@@ -157,7 +157,7 @@ func step(s *State, w window, g gathered, dt time.Duration) []event {
 			fresh = n.Sub(st.ModTime()) < editFresh
 		}
 		if working(w, t, fresh, s.practiceDir()) {
-			t.WorkSec += int(dt.Seconds())
+			t.addWork(n, int(dt.Seconds()))
 		}
 	}
 	evs = append(evs, plan(s, w, dt)...)
@@ -187,10 +187,32 @@ func (s *State) filter(evs []event) []event {
 func (s *State) markSaid(keys []string) {
 	for _, k := range keys {
 		s.Said[k] = now()
-		if t := s.Current; t != nil && k == "offer:"+t.ID {
+		if t := s.Current; t != nil && strings.HasPrefix(k, "offer:"+t.ID+":") {
 			t.Offers++
 		}
 	}
+}
+
+// offersADay: an unstarted task gets at most this many offer cards an
+// evening; after that it lives on the pill alone.
+const offersADay = 2
+
+// offerKey is the next offer card for t today, or "" when today's are used:
+// the first at once, the second OfferEvery after it.
+func (s *State) offerKey(t *Task, date string) string {
+	base := "offer:" + t.ID + ":" + date + ":"
+	var last time.Time
+	for i := 1; i <= offersADay; i++ {
+		at, ok := s.Said[base+strconv.Itoa(i)]
+		if !ok {
+			if i > 1 && now().Sub(last) < cfg().OfferEvery {
+				return ""
+			}
+			return base + strconv.Itoa(i)
+		}
+		last = at
+	}
+	return ""
 }
 
 // plan is the judgement: what's worth saying right now. No IO. dt is the
@@ -203,26 +225,24 @@ func plan(s *State, w window, dt time.Duration) []event {
 
 	// in a live round: the round and edge's health, nothing else
 	live := s.liveHeld()
-	if live == nil && (n.Hour() >= 7 || n.Sub(day(n)) >= 24*time.Hour) {
-		evs = append(evs, event{Key: "brief:" + date, Title: "edge · today", Body: briefing(s)})
-	}
-	if n.Hour() >= 22 && s.closed() && live == nil {
-		evs = append(evs, event{Key: "late:" + date, Urgent: true, Title: fmt.Sprintf("%d task(s) left today", need-got),
-			Body: "Claude stays locked outside " + tilde(s.practiceDir()) + " until it's done."})
-	}
-	for _, k := range slices.Sorted(mapsKeys(s.Trouble)) {
-		tr := s.Trouble[k]
-		wait := time.Duration(0)
-		if k == "cf" || k == "lc" || k == "ac" || strings.HasPrefix(k, "sync-") || strings.HasPrefix(k, "cal-") {
-			wait = troubleAfter // the judges blip; say so only when it lasts
-		}
-		if n.Sub(tr.Since) >= wait {
-			body := tr.Msg
-			if s.failOpen() != "" && (k == "assign" || k == "cf" || k == "lc") {
-				body += "\nThe gate is open until this is fixed."
+	// late: from 22:00 until the day ends (04:00), not just until midnight
+	if n.Sub(day(n)) >= 22*time.Hour && s.closed() && live == nil {
+		start := action{"next", "Start"}
+		if t := s.Current; t != nil {
+			start = action{"start:" + t.ID, "Start"}
+			if t.Active() {
+				start.Label = "Open"
 			}
-			evs = append(evs, event{Key: "health:" + k + ":" + date, Title: "edge needs a look", Body: body})
 		}
+		evs = append(evs, event{Key: "late:" + date, Urgent: true, Title: plural(need-got, "task") + " left today",
+			Body: "Claude stays locked outside " + tilde(s.practiceDir()) + " until it's done.", Actions: []action{start}})
+	}
+	for _, k := range s.troublesDue() { // the judges blip: those only once they've lasted
+		body := plainTrouble(s, k)
+		if s.failOpen() != "" && (k == "assign" || k == "cf" || k == "lc" || k == "ac") {
+			body += "\nThe gate is open until this is fixed."
+		}
+		evs = append(evs, event{Key: "health:" + k + ":" + date, Title: "edge needs a look", Body: body, Detail: s.Trouble[k].Msg})
 	}
 	evs = append(evs, s.roundEvents(w, dt)...)
 	if live != nil {
@@ -242,13 +262,12 @@ func plan(s *State, w window, dt time.Duration) []event {
 		return evs
 	}
 	if !t.Active() {
-		if studyTime(n) && !n.Before(s.Snooze) {
-			acts := []action{{"start", "Start"}, {"snooze", "In 30 min"}}
+		if k := s.offerKey(t, date); k != "" && studyTime(n) && !n.Before(s.Snooze) {
+			acts := []action{{"start:" + t.ID, "Start"}, {"snooze", "In 30 min"}}
 			if got >= need {
 				acts = append(acts, action{"rest", "Done for today"})
 			}
-			evs = append(evs, event{Key: "offer:" + t.ID, Every: cfg().OfferEvery, Title: offerTitle(t),
-				Body: fmt.Sprintf("%s · rating %d\nToday %d/%d · streak %d", t.Title, t.Rating, got, need, s.streak()), Actions: acts})
+			evs = append(evs, event{Key: k, Title: offerTitle(t), Body: offerBody(s, t), Actions: acts})
 		}
 		return evs
 	}
@@ -260,7 +279,7 @@ func plan(s *State, w window, dt time.Duration) []event {
 		for l := 3; l >= 1; l-- {
 			if el >= cfg().LadderAt[l-1] && t.Hints < l {
 				evs = append(evs, event{Key: fmt.Sprintf("hint:%s:%d", t.ID, l), Title: fmt.Sprintf("%s in · hint %d unlocked", in, l),
-					Body: t.Title, Actions: []action{{"hint", "Get hint"}, {"keep", "Keep going"}}})
+					Body: t.Title, Actions: []action{{"hint:" + t.ID, "Get hint"}, {"keep", "Keep going"}}})
 				break
 			}
 		}
@@ -268,19 +287,19 @@ func plan(s *State, w window, dt time.Duration) []event {
 		// the same moment ladder's first hint unlocks: the arms differ only in what's allowed
 		if t.Hints == 0 && el >= cfg().LadderAt[0] {
 			evs = append(evs, event{Key: "hint:" + t.ID + ":i1", Title: fmt.Sprintf("%s in · want a nudge?", in),
-				Body: t.Title, Actions: []action{{"hint", "Get hint"}, {"keep", "Keep going"}}})
+				Body: t.Title, Actions: []action{{"hint:" + t.ID, "Get hint"}, {"keep", "Keep going"}}})
 		}
 	case "cold":
 		if el >= 30*time.Minute {
-			evs = append(evs, event{Key: "cold:" + t.ID, Title: fmt.Sprintf("%s into the re-solve", in),
+			evs = append(evs, event{Key: "cold:" + t.ID, Every: giveUpEvery, Title: fmt.Sprintf("%s into the re-solve", in),
 				Body:    "No hints on re-solves. Giving up brings it back later, with the solution taught now.",
-				Actions: []action{{"teach", "Give up & learn it"}, {"keep", "Keep going"}}})
+				Actions: []action{{"giveup:" + t.ID, "Give up & learn it"}, {"keep", "Keep going"}}})
 		}
 	}
 	if ok, _ := canGiveUp(t); ok && el >= cfg().GiveUpAt && t.Policy != "cold" {
-		evs = append(evs, event{Key: "giveup:" + t.ID, Title: fmt.Sprintf("%s on %s", in, t.Title),
+		evs = append(evs, event{Key: "giveup:" + t.ID, Every: giveUpEvery, Title: fmt.Sprintf("%s on %s", in, t.Title),
 			Body:    "Honest work counts for today either way.",
-			Actions: []action{{"teach", "Teach me the solution"}, {"keep", "Keep going"}}})
+			Actions: []action{{"giveup:" + t.ID, "Teach me the solution"}, {"keep", "Keep going"}}})
 	}
 
 	if re := cfg().Distraction; re != nil && re.MatchString(w.Title) {
@@ -289,7 +308,7 @@ func plan(s *State, w window, dt time.Duration) []event {
 			s.DriftAt = n
 		} else if n.Sub(s.DriftAt) >= cfg().DriftAfter {
 			evs = append(evs, event{Key: "drift:" + t.ID, Every: 10 * time.Minute, Title: fmt.Sprintf("You're on %s", re.FindString(w.Title)),
-				Body: fmt.Sprintf("%s is waiting · %s of work in", t.Title, in)})
+				Body: fmt.Sprintf("%s is waiting · %s of work in", t.Title, in), Actions: []action{{"open:" + t.ID, "Back to it"}}})
 		}
 	} else {
 		s.DriftAt = time.Time{}
@@ -309,28 +328,34 @@ func offerTitle(t *Task) string {
 	return "Next problem is ready"
 }
 
-func briefing(s *State) string {
+// giveUpEvery: the give-up and cold cards come back this often while they
+// stay true, so missing one never leaves him without a way out.
+const giveUpEvery = 30 * time.Minute
+
+// offerBody is the offer's text: the problem, then the day. No "rating 0"
+// for an upsolve CF hasn't rated, no "streak 0".
+func offerBody(s *State, t *Task) string {
 	got, need := s.today()
-	due := 0
-	for _, p := range s.Probes {
-		if !p.Due.After(now()) {
-			due++
-		}
+	b := t.Title
+	if t.Rating > 0 {
+		b += fmt.Sprintf(" · rating %d", t.Rating)
 	}
-	b := fmt.Sprintf("Streak %d · today %d/%d · week %d/%d", s.streak(), got, need, s.creditsSince(weekStart(now())), cfg().Weekly)
-	if due > 0 {
-		b += fmt.Sprintf("\n%d re-solve(s) due", due)
+	b += fmt.Sprintf("\nToday %d/%d", got, need)
+	if k := s.streak(); k > 0 {
+		b += fmt.Sprintf(" · streak %d", k)
 	}
-	if g := s.gapDays(); g >= 2 {
-		b += fmt.Sprintf("\n%d days away. Today starts with an easy warm-up.", g)
-	}
-	if r := s.nextHeld(); r != nil && r.Start.Sub(now()) < 7*24*time.Hour {
-		b += fmt.Sprintf("\nNext round: %s, %s", r.Short(), clockDay(r.Start))
-	}
-	if r, p := s.nextUpsolve(); p != nil {
-		b += fmt.Sprintf("\nUpsolve %s %s by %s", r.Short(), p.Index, p.Due.Add(-time.Minute).Format("Mon"))
+	if p := s.upsolveOf(t); p != nil {
+		b += " · due " + p.Due.Add(-time.Minute).Format("Mon")
 	}
 	return b
+}
+
+// plural: "1 task", "2 tasks".
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return strconv.Itoa(n) + " " + what + "s"
 }
 
 func processCF(s *State, t *Task, subs []cfSub) []event {
@@ -417,7 +442,7 @@ func failEvent(t *Task, title string) event {
 	e := event{Key: fmt.Sprintf("fail:%s:%d", t.ID, t.Fails), Title: title, Body: t.Title}
 	if lvl, _ := hintAllowance(t); t.Fails >= 2 && lvl > t.Hints {
 		e.Body += fmt.Sprintf("\n%d misses. A hint is available.", t.Fails)
-		e.Actions = []action{{"hint", "Get hint"}, {"keep", "Keep going"}}
+		e.Actions = []action{{"hint:" + t.ID, "Get hint"}, {"keep", "Keep going"}}
 	}
 	return e
 }
@@ -435,7 +460,7 @@ func acceptedEvent(s *State, t *Task) event {
 	if t.Known {
 		body += "\nThat fast, you'd seen it before: no re-solves for this one."
 	}
-	acts := []action{{"explain", "Explain-back (2 min)"}}
+	acts := []action{{"explain:" + t.ID, "Explain-back (2 min)"}}
 	if s.wantsWork() {
 		acts = append(acts, action{"next", "Next problem"})
 	}
@@ -458,114 +483,12 @@ func verdictName(v string) string {
 	return strings.ReplaceAll(strings.ToLower(v), "_", " ")
 }
 
-// onAction runs a notification or Ember button. A repeat of the same key
-// within a few seconds (a double click, two notifications) is dropped.
-func onAction(key string) {
-	var cat *catalog
-	if key == "start" || key == "next" {
-		if snap, err := load(); err == nil && snap.Current == nil {
-			cat = loadCatalog() // outside the lock
-		}
-	}
-	var launch func()
-	err := update(func(s *State) error {
-		if s.LastAct == key && now().Sub(s.LastActAt) < 3*time.Second {
-			return nil
-		}
-		s.LastAct, s.LastActAt = key, now()
-		switch key {
-		case "start", "next":
-			s.Snooze = time.Time{}
-			if s.Current == nil {
-				if cat == nil {
-					return fmt.Errorf("no problem lists loaded")
-				}
-				if _, err := assign(s, cat); err != nil {
-					return err
-				}
-			}
-			t := *s.Current
-			begin(s, s.Current, now())
-			launch = func() {
-				if err := scaffold(&t); err != nil {
-					log.Println("scaffold:", err)
-				}
-				launchWork(&t)
-			}
-		case "snooze":
-			s.Snooze = now().Add(cfg().OfferEvery)
-		case "rest":
-			s.Snooze = day(now()).AddDate(0, 0, 1).Add(cfg().DayEnds)
-		case "upsolve":
-			if t := s.Current; t != nil && t.Kind != "upsolve" {
-				if t.Active() {
-					return fmt.Errorf("finish %s first; the upsolve is next", t.Title)
-				}
-				s.Current = nil // unstarted: it comes back another day
-			}
-			if s.Current == nil {
-				if _, p := s.nextUpsolve(); p == nil {
-					return fmt.Errorf("no upsolve waiting")
-				}
-				if _, err := assign(s, nil); err != nil {
-					return err
-				}
-			}
-			t := *s.Current
-			begin(s, s.Current, now())
-			launch = func() {
-				if err := scaffold(&t); err != nil {
-					log.Println("scaffold:", err)
-				}
-				launchWork(&t)
-			}
-		case "keep":
-		case "debrief":
-			launch = func() { launchClaude("/edge-round") }
-		case "hint":
-			launch = func() { launchClaude("/edge-stuck") }
-		case "teach":
-			launch = func() { launchClaude("/edge-giveup") }
-		case "explain":
-			launch = func() { launchClaude("/edge-done") }
-		default:
-			verb, id, _ := strings.Cut(key, ":")
-			r := s.round(id)
-			if r == nil {
-				return fmt.Errorf("no round %q", id)
-			}
-			switch verb {
-			case "register":
-				u := r.regURL()
-				launch = func() { spawn(workDir(), cfg().Browser, u) }
-			case "openround":
-				rr := *r
-				launch = func() { launchRound(&rr) }
-			case "skipround":
-				if r.Joined == "live" {
-					return fmt.Errorf("you've already submitted in %s: you're in it", r.Short())
-				}
-				r.Plan = "out"
-				log.Println("can't make it:", r.ID)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		log.Println("action", key, err)
-		return
-	}
-	if launch != nil {
-		launch()
-	}
-}
-
 func daemon() {
 	log.SetFlags(0)
 	log.Println("edge daemon up")
 	acts := make(chan string, 8)
-	var last []byte
-	var lastSent, brokenSaid, lastTick time.Time
+	var link emberLink
+	var brokenSaid, lastTick time.Time
 	var sw statsWriter
 	for {
 		touch(daemonSeenPath())
@@ -604,21 +527,7 @@ func daemon() {
 		if stats != nil {
 			sw.publish(*stats)
 		}
-		// resend now and then too: Ember forgets everything when Noctalia restarts
-		if b, _ := json.Marshal(st); !bytes.Equal(b, last) || time.Since(lastSent) > time.Minute {
-			if toEmber(map[string]any{"type": "status", "status": st}) {
-				last, lastSent = b, time.Now()
-			}
-		}
-		var said []string
-		for _, e := range evs {
-			if toEmber(map[string]any{"type": "card", "card": emberCardFor(e)}) || notify(e, acts) {
-				log.Printf("said %s: %s", e.Key, e.Title)
-				said = append(said, e.Key)
-			} else {
-				log.Printf("couldn't say %s; will retry", e.Key)
-			}
-		}
+		said := link.tick(st, evs, acts)
 		if len(said) > 0 {
 			if err := update(func(s *State) error { s.markSaid(said); return nil }); err != nil {
 				log.Println("mark said:", err)

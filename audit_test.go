@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,9 @@ func actionEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("NIRI_SOCKET", "")
 	writeConfig(t, "[launch]\nterminal = \"true\"\neditor = \"true\"\nbrowser = \"true\"\n")
+	old := catalogFn
+	catalogFn = func() *catalog { return &catalog{err: map[string]error{"cf": os.ErrNotExist}} } // offline
+	t.Cleanup(func() { catalogFn = old })
 }
 
 // logs captures edge's log during f.
@@ -67,13 +71,11 @@ func TestAuditLapsedUpsolveStaysCurrent(t *testing.T) {
 // with another round's upsolve current, it reopens that one. Live at 18:54
 // on 27 Oct: CF 1130's card would have reopened CF 1128 C.
 func TestAuditUpsolveButtonIgnoresItsRound(t *testing.T) {
-	t.Skip("pending")
 	actionEnv(t)
 	at(t, wed)
 	s := fresh(t)
 	missedRound(s, "cf:2261", wed.AddDate(0, 0, -3))
-	assign(s, nil)
-	begin(s, s.Current, now()) // working on CF 2261's upsolve
+	assign(s, nil) // CF 2261's upsolve is current, not started
 	at(t, wed.Add(3*time.Hour))
 	y := missedRound(s, "cf:2272", wed)
 	var card emberCard
@@ -82,18 +84,31 @@ func TestAuditUpsolveButtonIgnoresItsRound(t *testing.T) {
 			card = emberCardFor(e)
 		}
 	}
+	key := ""
 	for _, b := range card.Buttons {
-		if b.Key == "upsolve" {
-			t.Errorf("%s's card: button %q doesn't name its round", y.ID, b.Key)
+		if strings.HasPrefix(b.Key, "upsolve") {
+			key = b.Key
 		}
+	}
+	if key != "upsolve:cf:2272" {
+		t.Fatalf("%s's card: button %q doesn't name its round", y.ID, key)
 	}
 	if err := s.save(); err != nil {
 		t.Fatal(err)
 	}
-	onAction("upsolve")
+	onAction(key)
 	s2, _ := load()
-	if s2.Current == nil || s2.Current.Round != "cf:2272" {
-		t.Errorf("Upsolve on cf:2272's card: current is %s (round %s)", s2.Current.ID, s2.Current.Round)
+	if s2.Current == nil || s2.Current.Round != "cf:2272" || !s2.Current.Active() {
+		t.Errorf("Upsolve on cf:2272's card: current is %+v", s2.Current)
+	}
+	if r := s2.round("cf:2261"); r.owed(now()) == nil {
+		t.Errorf("CF 2261's upsolve was put back, so it's still owed: %+v", r.Problems)
+	}
+
+	// working on another task: the click says so instead of acting on it
+	at(t, wed.Add(3*time.Hour+time.Minute))
+	if _, err := act("upsolve:cf:2261"); err == nil || !strings.Contains(err.Error(), "finish") {
+		t.Errorf("upsolve while another is active: %v", err)
 	}
 }
 
@@ -126,7 +141,6 @@ func TestAuditUpsolveActionDropsResolve(t *testing.T) {
 // for it: the default branch looks for round "" and logs an error nobody
 // sees (`edge action` runs from Ember with its output discarded).
 func TestAuditOpenAction(t *testing.T) {
-	t.Skip("pending")
 	actionEnv(t)
 	at(t, wed)
 	s := fresh(t)
@@ -144,7 +158,6 @@ func TestAuditOpenAction(t *testing.T) {
 // yesterday evening shows yesterday's minutes as today's, and yesterday
 // as 0: the week bars and the "focused today" line are wrong.
 func TestAuditTodayWorkFromYesterday(t *testing.T) {
-	t.Skip("pending")
 	at(t, wed.Add(-24*time.Hour)) // Tuesday 21:00
 	s := fresh(t)
 	pending(s)

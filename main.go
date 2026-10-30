@@ -41,7 +41,15 @@ func main() {
 		if len(args) != 1 {
 			usage()
 		}
-		onAction(args[0])
+		msg, err := act(args[0])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, sentence(err.Error()))
+			os.Exit(1)
+		}
+		if msg == "" {
+			msg = "ok"
+		}
+		fmt.Println(msg)
 		return
 	case "install":
 		check(install())
@@ -121,7 +129,11 @@ func main() {
 	var buf bytes.Buffer
 	out = &buf
 	var after func()
+	var before taskMark
+	var st emberStatus
 	err = update(func(s *State) error {
+		before = markOf(s.Current)
+		defer func() { st = edgeStatus(s) }()
 		s.pin()
 		switch cmd {
 		case "sync":
@@ -201,9 +213,31 @@ func main() {
 	out = os.Stdout
 	check(err)
 	os.Stdout.Write(buf.Bytes())
+	switch cmd {
+	case "giveup", "skip", "done":
+		if t := snap.Current; t != nil {
+			logEvent(cmd, map[string]any{"task": t.ID, "kind": t.Kind, "work_sec": t.WorkSec, "via": "cli"})
+		}
+	}
+	if cmd != "sync" && cmd != "round" { // the island follows at once, not at the next tick
+		afterChange(before, statusMark(st), st)
+	}
 	if after != nil {
 		after()
 	}
+}
+
+// sentence makes an error read as one plain sentence: "Finish 2277C first."
+func sentence(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+	s = strings.ToUpper(s[:1]) + s[1:]
+	if !strings.HasSuffix(s, ".") && !strings.HasSuffix(s, "?") && !strings.HasSuffix(s, "!") {
+		s += "."
+	}
+	return s
 }
 
 const usageText = "usage: edge daemon|hook|action <key>|install|status|stats [--compact]|config [init]|next|start|stuck [--take N]|done|giveup|skip [--seen]|explain [0-2]|rounds|round [lesson <text>]|report|pass|sync"
