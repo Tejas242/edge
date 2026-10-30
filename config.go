@@ -50,6 +50,12 @@ type Config struct {
 	RoundLock   bool     // [contests] lock: no Claude at all during a live round you're in
 	UpsolveN    int      // [contests] upsolve: problems past your last solve that become upsolves
 	UpsolveDays int      // [contests] upsolve_days: an upsolve not done by then lapses
+
+	Trial1, Trial2 time.Time     // [trials] trial1, trial2: the days each trial starts
+	CueWeekday     time.Duration // [trials] cue_weekday: tonight's default rep time, Mon-Fri
+	CueWeekend     time.Duration // [trials] cue_weekend: same, Sat-Sun
+	OfficeUntil    time.Duration // [trials] office_until: weekdays, the evening cue waits until after this
+	SkipTokens     int           // [trials] skip_tokens: skip-tonight tokens a week (Mon-Sun)
 }
 
 func defaultConfig() *Config {
@@ -77,6 +83,8 @@ func defaultConfig() *Config {
 		DriftAfter: 2 * time.Minute, OfferEvery: 30 * time.Minute,
 		Terminal: "alacritty", Editor: "nvim", Browser: "xdg-open",
 		Rounds: true, RoundJudges: []string{"cf", "ac", "lc"}, PerWeek: 2, RoundLock: true, UpsolveN: 2, UpsolveDays: 7,
+		Trial1: trial1From, Trial2: trial2From, CueWeekday: 19*time.Hour + 30*time.Minute, CueWeekend: 12*time.Hour + 30*time.Minute,
+		OfficeUntil: 17 * time.Hour, SkipTokens: 1,
 	}
 }
 
@@ -179,6 +187,17 @@ per_week     = 2     # rounds you're held to each week, at most one a day, in st
 lock         = true  # no Claude at all while you're in a live round (rounds ban AI anyway)
 upsolve      = 2     # problems past your last solve that become upsolves, one after another
 upsolve_days = 7     # an upsolve not done by then lapses
+
+# Trials: edge v2's pre-registered experiments. Trial 1 (the evening rep, the
+# chain, skip tokens) runs 14 days from trial1; under 7 reps in those days
+# switches it off again. Trial 2 (readiness) starts at trial2.
+[trials]
+trial1       = "2026-11-06"
+trial2       = "2026-11-20"
+cue_weekday  = "19:30"  # tonight's rep time unless you pick another, Mon-Fri
+cue_weekend  = "12:30"  # same, Sat-Sun
+office_until = "17:00"  # weekdays: the "When?" card waits for your first unlock after this
+skip_tokens  = 1        # skip-tonight tokens a week (Mon-Sun), used before the cue
 `
 
 var (
@@ -415,9 +434,32 @@ func parseConfig(path string) (*Config, []string) {
 			num(0, 5, func(x int) { c.UpsolveN = x })
 		case "contests.upsolve_days":
 			num(1, 30, func(x int) { c.UpsolveDays = x })
+		case "trials.trial1", "trials.trial2":
+			d, err := time.ParseInLocation(time.DateOnly, str, time.Local)
+			if err != nil {
+				fail()
+				continue
+			}
+			if k == "trial1" {
+				c.Trial1 = d
+			} else {
+				c.Trial2 = d
+			}
+		case "trials.cue_weekday":
+			clock(func(d time.Duration) { c.CueWeekday = d })
+		case "trials.cue_weekend":
+			clock(func(d time.Duration) { c.CueWeekend = d })
+		case "trials.office_until":
+			clock(func(d time.Duration) { c.OfficeUntil = d })
+		case "trials.skip_tokens":
+			num(0, 7, func(x int) { c.SkipTokens = x })
 		default:
 			bad = append(bad, fmt.Sprintf("line %d: unknown key %s.%s", n, section, k))
 		}
+	}
+	if !c.Trial2.After(c.Trial1) {
+		bad = append(bad, "trials: trial2 must come after trial1; using the default dates")
+		c.Trial1, c.Trial2 = trial1From, trial2From
 	}
 	return c, bad
 }

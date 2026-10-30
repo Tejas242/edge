@@ -4,7 +4,9 @@ import "time"
 
 // Consistency is the Trial 1 state: tonight's cue, reps, the chain and skip
 // tokens. v2/consistency owns this file.
-type Consistency struct{}
+type Consistency struct {
+	Reverted bool `json:"reverted,omitempty"` // Trial 1 ended under its line: its rules are off
+}
 
 // ConsistencyStats is its part of `edge stats`.
 type ConsistencyStats struct{}
