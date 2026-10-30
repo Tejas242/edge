@@ -18,6 +18,7 @@ import (
 const (
 	repFocus      = 25 * time.Minute // focused work that makes a day's rep
 	repFocusBack  = 20 * time.Minute // the bar the day after a miss: never miss twice
+	repSubmitAt   = 15 * time.Minute // a submit counts only after this much focused work on that problem that day: a quick junk submit doesn't open the gate
 	idleGap       = 90 * time.Minute // asleep, locked or idle this long: the next activity is an unlock
 	cueNudgeAfter = 15 * time.Minute // no start this long after the cue: one gentle card
 	cueNudgeUntil = 3 * time.Hour    // and not later than this after it
@@ -107,7 +108,7 @@ var repRank = map[string]int{"submit": 1, "focus": 2, "giveup": 3, "round": 4, "
 // repDays says, per edge day, why it has a rep ("" = none), from the state
 // alone so the gate's process sees what the daemon sees: an accepted
 // solution, a round sat, a give-up after 25 focused minutes, 25 focused
-// minutes in all, or a submission. Days the daemon latched at the lower bar
+// minutes in all, or a submission after 15 focused minutes on that problem. Days the daemon latched at the lower bar
 // after a miss keep their rep. work is the focused seconds per day.
 func (s *State) repDays() (kinds map[string]string, work map[string]int) {
 	kinds, work = map[string]string{}, map[string]int{}
@@ -117,8 +118,18 @@ func (s *State) repDays() (kinds map[string]string, work map[string]int) {
 		}
 	}
 	sub := func(t *Task) {
-		if t.SubSeen > 0 {
-			set(dateKey(day(time.Unix(t.SubSeen, 0))), "submit")
+		if t.SubSeen <= 0 {
+			return
+		}
+		d := day(time.Unix(t.SubSeen, 0))
+		worked := 0
+		t.workByDay(func(wd time.Time, sec int) {
+			if dateKey(wd) == dateKey(d) {
+				worked += sec
+			}
+		})
+		if time.Duration(worked)*time.Second >= repSubmitAt {
+			set(dateKey(d), "submit")
 		}
 	}
 	for i := range s.History {
@@ -620,7 +631,7 @@ func nudgeCard(s *State, r *ConsDay, cs chainState) event {
 		start.Key = "start:" + t.ID
 	}
 	return event{Key: "cuenudge:" + r.Date, Title: "Ready when you are",
-		Body:    fmt.Sprintf("Tonight's rep: %s\n%d focused minutes, a submit or an AC counts.", repLabel(s), int(cs.Bar.Minutes())),
+		Body:    fmt.Sprintf("Tonight's rep: %s\n%d focused minutes, an AC, or a submit after 15 minutes counts.", repLabel(s), int(cs.Bar.Minutes())),
 		Actions: []action{start}}
 }
 

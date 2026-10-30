@@ -45,7 +45,11 @@ func TestRepRules(t *testing.T) {
 		{"24 focused minutes", func(s *State) { worked(s, "cf:1A", 9, 24, "skipped") }, ""},
 		{"25 focused minutes", func(s *State) { worked(s, "cf:1A", 9, 25, "skipped") }, "focus"},
 		{"two tasks, 25 minutes", func(s *State) { worked(s, "cf:1A", 9, 9, "skipped"); worked(s, "cf:1B", 9, 16, "ignored") }, "focus"},
-		{"a submit", func(s *State) { pending(s).SubSeen = nov(9, 20, 10).Unix() }, "submit"},
+		{"a quick submit", func(s *State) { pending(s).SubSeen = nov(9, 20, 10).Unix() }, ""},
+		{"a submit after 16 minutes", func(s *State) {
+			t := pending(s)
+			t.SubSeen, t.WorkSec, t.WorkDays = nov(9, 20, 10).Unix(), 16*60, map[string]int{dateKey(day(nov(9, 20, 10))): 16 * 60}
+		}, "submit"},
 		{"an AC", func(s *State) { worked(s, "cf:1A", 9, 12, "solo") }, "ac"},
 		{"a give-up after 30", func(s *State) { worked(s, "cf:1A", 9, 30, "gaveup") }, "giveup"},
 		{"a give-up after 10", func(s *State) { worked(s, "cf:1A", 9, 10, "gaveup") }, ""},
@@ -581,5 +585,27 @@ func TestConsistencyStats(t *testing.T) {
 		if !strings.Contains(string(b), k) {
 			t.Errorf("day has no %s: %s", k, b)
 		}
+	}
+}
+
+// A quick junk submit doesn't make the rep: a submit counts only after 15
+// focused minutes on that problem that day. An AC always counts.
+func TestSubmitCountsOnlyAfterRealWork(t *testing.T) {
+	n := time.Date(2026, 11, 9, 21, 0, 0, 0, time.Local)
+	date := dateKey(day(n))
+	quick := &State{Current: &Task{ID: "cf:1A", Started: n.Add(-3 * time.Minute), SubSeen: n.Unix(),
+		WorkSec: 120, WorkDays: map[string]int{date: 120}}}
+	if k, _ := quick.repDays(); k[date] != "" {
+		t.Fatalf("a submit after 2 minutes made the rep: %q", k[date])
+	}
+	real := &State{Current: &Task{ID: "cf:1A", Started: n.Add(-20 * time.Minute), SubSeen: n.Unix(),
+		WorkSec: 16 * 60, WorkDays: map[string]int{date: 16 * 60}}}
+	if k, _ := real.repDays(); k[date] != "submit" {
+		t.Fatalf("a submit after 16 focused minutes didn't count: %q", k[date])
+	}
+	ac := &State{History: []Task{{ID: "cf:1A", Started: n.Add(-4 * time.Minute), Finished: n, Outcome: "solo",
+		SubSeen: n.Unix(), WorkSec: 180, WorkDays: map[string]int{date: 180}}}}
+	if k, _ := ac.repDays(); k[date] != "ac" {
+		t.Fatalf("a quick AC still counts: %q", k[date])
 	}
 }
