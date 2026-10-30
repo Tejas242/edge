@@ -1,9 +1,12 @@
 package main
 
 import (
+	"fmt"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -275,4 +278,179 @@ func (s *State) nextSource() string {
 		return "cf"
 	}
 	return "lc"
+}
+
+// ---- Trial 2: the readiness picker ----
+
+// lcMediumFloor: weekday LeetCode picks are medium or hard. The list has
+// zerotrac's contest ratings, not LeetCode's labels; contests' Q1 easies sit
+// at about 1100–1350, so 1400 keeps them out.
+const lcMediumFloor = 1400
+
+// pOffset is how far below θ a problem must be to be solved with chance p:
+// d = θ − 400·log10(p/(1−p)); 147 for 0.70, 70 for 0.60.
+func pOffset(p float64) float64 { return 400 * math.Log10(p/(1-p)) }
+
+// pickReady is Trial 2's picker; assign runs it after upsolves and due
+// re-solves. A pattern whose memory has faded under 0.8 and that has a
+// solved problem gets a cold re-solve; otherwise a Thompson draw over the
+// patterns by w·(1 − P·r) picks one, and a new problem in it at the
+// difficulty where P ≈ 0.70. Weekdays are LeetCode, weekends Codeforces.
+// false = nothing fits: the usual picker runs.
+func (s *State) pickReady(t *Task, cat *catalog) bool {
+	m := s.model()
+	return s.pickResolve(t, m) || s.pickThompson(t, cat, m)
+}
+
+// solvedOnce is a problem he has solved, and when he last touched it.
+type solvedOnce struct {
+	p    Problem
+	last time.Time
+}
+
+// solvedProblems: Codeforces accepts and edge's own solved tasks, each with
+// its last attempt of any kind.
+func (s *State) solvedProblems(cat map[string]Problem) map[string]solvedOnce {
+	out := map[string]solvedOnce{}
+	for id, at := range s.CFDone {
+		if p, ok := cat[id]; ok {
+			out[id] = solvedOnce{p, time.Unix(at, 0)}
+		}
+	}
+	for _, t := range s.History {
+		x, ok := out[t.ID]
+		if !ok && (t.Outcome == "solo" || t.Outcome == "assisted") && !t.Known {
+			x.p = Problem{ID: t.ID, Title: t.Title, URL: t.URL, Rating: t.Rating, Tags: t.Tags}
+			if p, ok := cat[t.ID]; ok {
+				x.p = p
+			}
+			ok = true
+		}
+		if ok {
+			if t.Finished.After(x.last) {
+				x.last = t.Finished
+			}
+			out[t.ID] = x
+		}
+	}
+	return out
+}
+
+// pickResolve: the most-needed faded pattern's solved problem nearest the
+// P ≈ 0.70 difficulty, not touched in the last 30 days and not already
+// waiting as a re-solve.
+func (s *State) pickResolve(t *Task, m *readyModel) bool {
+	solved := s.solvedProblems(m.cat)
+	waiting := map[string]bool{}
+	for _, p := range s.Probes {
+		waiting[p.Problem] = true
+	}
+	cutoff := now().AddDate(0, 0, -30)
+	order := sortedPatterns(func(id string) float64 { x := m.byID[id]; return x.Weight * (1 - x.R) })
+	for _, id := range order {
+		x, k := m.byID[id], m.skill[id]
+		if x.Weight <= 0 || x.R >= resolveBelow || x.Solved == 0 {
+			continue
+		}
+		target := k.Theta - pOffset(pickP)
+		var best []Problem
+		gap := math.Inf(1)
+		for pid, so := range solved {
+			src := so.p.ID[:2]
+			d := float64(cfScale(src, so.p.Rating))
+			if d == 0 || waiting[pid] || so.last.After(cutoff) || !hasPattern(src, so.p.Tags, id) {
+				continue
+			}
+			switch g := math.Abs(d - target); {
+			case g < gap:
+				best, gap = []Problem{so.p}, g
+			case g == gap:
+				best = append(best, so.p)
+			}
+		}
+		if len(best) == 0 {
+			continue
+		}
+		slices.SortFunc(best, func(a, b Problem) int { return strings.Compare(a.ID, b.ID) })
+		p := best[rand.IntN(len(best))]
+		*t = Task{ID: p.ID, Kind: "resolve", Title: p.Title, URL: p.URL, Rating: p.Rating, Tags: p.Tags, Policy: "cold"}
+		days := int(day(now()).Sub(day(k.Last)).Hours() / 24)
+		s.Ready.Pick = &readyPick{Task: p.ID, Pattern: id, P: round3(solveP(k.Theta, float64(cfScale(p.ID[:2], p.Rating)))),
+			Why: fmt.Sprintf("%s is fading: last solved %s ago. One from your past, from scratch.", x.Name, plural(days, "day"))}
+		return true
+	}
+	return false
+}
+
+// pickThompson draws each pattern's skill from N(θ, σ) and goes for the
+// biggest sampled gap w·(1 − P·r): uncertain patterns get their turn
+// without a fixed rotation.
+func (s *State) pickThompson(t *Task, cat *catalog, m *readyModel) bool {
+	src := "lc"
+	if weekend(now()) {
+		src = "cf"
+	}
+	if !slices.Contains(cfg().Sources, src) {
+		src = other(src)
+	}
+	probs := cat.probs(src)
+	if probs == nil {
+		return false
+	}
+	need := map[string]float64{}
+	for _, p := range patterns {
+		k, x := m.skill[p.ID], m.byID[p.ID]
+		need[p.ID] = x.Weight * (1 - solveP(k.Theta+k.Sigma*rand.NormFloat64(), m.interview)*x.R)
+	}
+	byPat := map[string][]Problem{}
+	for _, p := range probs {
+		if p.Rating <= 0 || src == "lc" && p.Rating < lcMediumFloor ||
+			src == "cf" && (p.Contest < 1300 || slices.Contains(p.Tags, "*special")) || s.offered(p.ID) {
+			continue
+		}
+		for _, id := range patternsOf(src, p.Tags) {
+			byPat[id] = append(byPat[id], p)
+		}
+	}
+	for _, id := range sortedPatterns(func(id string) float64 { return need[id] }) {
+		k, x := m.skill[id], m.byID[id]
+		if need[id] <= 0 {
+			break
+		}
+		target := k.Theta - pOffset(pickP)
+		for _, width := range []float64{100, 200, 300} {
+			var cands []Problem
+			for _, p := range byPat[id] {
+				if math.Abs(float64(cfScale(src, p.Rating))-target) <= width {
+					cands = append(cands, p)
+				}
+			}
+			if len(cands) == 0 {
+				continue
+			}
+			p := cands[rand.IntN(len(cands))]
+			*t = Task{ID: p.ID, Kind: "new", Title: p.Title, URL: p.URL, Rating: p.Rating, Tags: p.Tags, Focus: focusTag(src, p.Tags, id)}
+			why := fmt.Sprintf("%s: the biggest gap to interview level right now.", x.Name)
+			if x.R == 0 {
+				why = fmt.Sprintf("%s: not shown yet. Interviews ask it.", x.Name)
+			}
+			s.Ready.Pick = &readyPick{Task: p.ID, Pattern: id, P: round3(solveP(k.Theta, float64(cfScale(src, p.Rating)))), Why: why}
+			return true
+		}
+	}
+	return false
+}
+
+// focusTag is the problem's own tag that makes it pattern id, so the
+// existing topic stats keep working.
+func focusTag(src string, tags []string, id string) string {
+	for _, tag := range tags {
+		if hasPattern(src, []string{tag}, id) {
+			return tag
+		}
+	}
+	if src == "lc" && strings.HasPrefix(id, "dp-") {
+		return "dynamic-programming"
+	}
+	return ""
 }

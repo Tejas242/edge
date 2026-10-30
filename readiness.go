@@ -416,9 +416,9 @@ type ReadinessStats struct {
 	Model     int            `json:"model"`            // model version
 	Interview int            `json:"interview_rating"` // the interview problem's difficulty, Codeforces scale
 	LCOffset  int            `json:"lc_offset"`        // LeetCode (zerotrac) rating − this = Codeforces scale
-	Pct       int            `json:"pct"`              // readiness now, 0..100
-	Lo        int            `json:"lo"`               // its 80% interval
-	Hi        int            `json:"hi"`
+	R         float64        `json:"r"`                // readiness now, 0..1
+	Lo        float64        `json:"lo"`               // its 80% interval
+	Hi        float64        `json:"hi"`
 	Target    float64        `json:"target"` // what each pattern's ready aims at (0..1)
 	Patterns  []ReadyPattern `json:"patterns"`
 	Pick      *readyPick     `json:"pick,omitempty"` // why the current task, when Trial 2 picked it
@@ -448,7 +448,7 @@ type DrillStat struct {
 func (s *State) readinessStats() *ReadinessStats {
 	m := s.model()
 	st := &ReadinessStats{Model: readyModelVersion, Interview: int(m.interview), LCOffset: lcOffset,
-		Pct: pct(m.R), Lo: pct(m.Lo), Hi: pct(m.Hi), Target: readyTarget, Patterns: m.pats}
+		R: round3(m.R), Lo: round3(m.Lo), Hi: round3(m.Hi), Target: readyTarget, Patterns: m.pats}
 	if p := s.Ready.Pick; p != nil && s.Current != nil && s.Current.ID == p.Task {
 		st.Pick = p
 	}

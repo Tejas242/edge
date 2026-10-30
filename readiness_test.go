@@ -143,8 +143,8 @@ func TestReadinessIntervalAndStability(t *testing.T) {
 	}
 	setCat(t, ps...)
 	st := s.readinessStats()
-	if st.Pct <= 0 || st.Lo > st.Pct || st.Pct > st.Hi || st.Lo == st.Hi {
-		t.Fatalf("R %d in [%d, %d]", st.Pct, st.Lo, st.Hi)
+	if st.R <= 0 || st.Lo > st.R || st.R > st.Hi || st.Lo == st.Hi || st.Hi > 1 {
+		t.Fatalf("R %.3f in [%.3f, %.3f]", st.R, st.Lo, st.Hi)
 	}
 	if len(st.Patterns) != len(patterns) || st.Model != readyModelVersion || st.Interview != interviewDefault {
 		t.Fatalf("stats: %+v", st)

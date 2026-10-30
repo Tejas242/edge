@@ -41,6 +41,9 @@ func assign(s *State, cat *catalog) (*Task, error) {
 			s.Probes = slices.Delete(s.Probes, i, i+1)
 			break
 		}
+		if s.phase(now()) == "trial2" && s.pickReady(t, cat) {
+			break // Trial 2: readiness picks (pick.go)
+		}
 		if err := s.newTask(t, cat); err != nil {
 			s.trouble("assign", "can't pick a problem: "+err.Error())
 			return nil, err
