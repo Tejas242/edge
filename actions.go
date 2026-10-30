@@ -300,7 +300,17 @@ func act(key string) (string, error) {
 			log.Println("back in:", r.ID)
 			msg = "Back in " + r.Short()
 		default:
-			return fmt.Errorf("unknown action %q", key)
+			ok, m, err := consistencyAction(s, verb, arg)
+			if !ok {
+				ok, m, err = readinessAction(s, verb, arg)
+			}
+			if !ok {
+				return fmt.Errorf("unknown action %q", key)
+			}
+			if err != nil {
+				return err
+			}
+			msg = m
 		}
 		st = edgeStatus(s)
 		return nil

@@ -38,6 +38,10 @@ type Stats struct {
 	Health     []StatsTrouble         `json:"health"`
 	Daemon     StatsDaemon            `json:"daemon"`
 	Rounds     StatsRounds            `json:"rounds"`
+
+	Phase       string            `json:"phase,omitempty"`       // baseline | trial1 | trial2
+	Consistency *ConsistencyStats `json:"consistency,omitempty"` // Trial 1
+	Readiness   *ReadinessStats   `json:"readiness,omitempty"`   // Trial 2
 }
 
 // StatsRounds is live contests: the plan, the one on now, how they went
@@ -276,6 +280,7 @@ func (s *State) stats() Stats {
 	today := day(n)
 	got, need := s.today()
 	st := Stats{Version: statsVersion, Generated: n, Accounts: map[string]string{"cf": c.CFUser, "lc": c.LCUser}}
+	st.Phase, st.Consistency, st.Readiness = s.phase(n), s.consistencyStats(), s.readinessStats()
 
 	// today and the gate
 	from := c.WeekdayFrom

@@ -97,6 +97,8 @@ type Trouble struct {
 }
 
 type State struct {
+	Cons      Consistency              `json:"consistency"` // Trial 1 (consistency.go)
+	Ready     Readiness                `json:"readiness"`   // Trial 2 (readiness.go)
 	Current   *Task                    `json:"current,omitempty"`
 	History   []Task                   `json:"history"`
 	Probes    []Probe                  `json:"probes"`

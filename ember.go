@@ -66,6 +66,20 @@ type emberStatus struct {
 	Debrief     string      `json:"debrief,omitempty"`     // round id waiting for its debrief
 	Health      string      `json:"health,omitempty"`      // one plain sentence when a judge is down
 	SeenMs      int64       `json:"seenMs,omitempty"`      // daemon heartbeat; the adapter treats > 90 s old as stopped
+
+	// Contract v2.1 (v2/base): the trials. All optional.
+	Phase      string `json:"phase,omitempty"`      // baseline | trial1 | trial2
+	CueMs      int64  `json:"cueMs,omitempty"`      // tonight's rep time, once set
+	RepDone    bool   `json:"repDone,omitempty"`    // today's rep counts
+	Chain      int    `json:"chain,omitempty"`      // days in the chain (one miss doesn't break it)
+	Missed     int    `json:"missed,omitempty"`     // misses in a row right now: 0 or 1 (2 breaks the chain)
+	SkipTokens int    `json:"skipTokens,omitempty"` // left this week
+	DeadlineMs int64  `json:"deadlineMs,omitempty"` // the rep's interview countdown ends then
+	Pattern    string `json:"pattern,omitempty"`    // the current task's interview pattern
+	Drill      bool   `json:"drill,omitempty"`      // the current task is the weekly drill
+	ReadyPct   int    `json:"readyPct,omitempty"`   // readiness, 0..100
+	ReadyLo    int    `json:"readyLo,omitempty"`    // its 80% interval
+	ReadyHi    int    `json:"readyHi,omitempty"`
 }
 
 // emberOwed is one round that still owes upsolves.
@@ -448,6 +462,9 @@ func edgeStatus(s *State) emberStatus {
 	if ks := s.troublesDue(); len(ks) > 0 {
 		st.Health = plainTrouble(s, ks[0])
 	}
+	st.Phase = s.phase(n)
+	consistencyStatus(s, &st)
+	readinessStatus(s, &st)
 	runtimeStatus(s, &st) // working, paused, the clock's anchor, judging: for CLI pushes too
 	return st
 }
