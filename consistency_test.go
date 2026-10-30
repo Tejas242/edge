@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -484,5 +485,101 @@ func TestInterviewCountdown(t *testing.T) {
 	begin(s, s.Current, nov(4, 20, 0))
 	if st := edgeStatus(s); st.DeadlineMs != 0 {
 		t.Fatal("baseline: no countdown")
+	}
+}
+
+// Trial 1's verdict on the first day after it: under 7 of 14 reverts it (the
+// baseline rules again, Trial 2 never starts) and one card says so plainly.
+func TestTrial1Revert(t *testing.T) {
+	s := consState(t, nov(20, 18, 0))
+	resetConsRT(t)
+	for _, d := range []int{6, 7, 9, 12, 15, 18} { // 6 of 14
+		rep(s, d)
+	}
+	evs := consStep(t, s, nov(20, 18, 0), termWin)
+	v := s.Cons.Verdict
+	if v == nil || v.Reps != 6 || v.Days != 14 || !v.Reverted || !s.Cons.Reverted || s.phase(now()) != "baseline" {
+		t.Fatalf("verdict: %+v", v)
+	}
+	var card *event
+	for i := range evs {
+		if evs[i].Key == "trialend:trial1" {
+			card = &evs[i]
+		}
+	}
+	if card == nil || card.Title != "Trial 1 is over: 6 of 14 evenings" ||
+		card.Body != "That's under the line of 7, so the evening cue and the chain switch off. edge is back to the old rules: 1 problem on weekdays, 3 problems on weekends." {
+		t.Fatalf("card: %+v", card)
+	}
+	if strings.Contains(keys(consStep(t, s, nov(20, 18, 5), browserWin)), "trialend") {
+		t.Fatal("said twice")
+	}
+	if got, need := s.today(); need != 1 || got != 0 || edgeStatus(s).Chain != 0 {
+		t.Fatalf("baseline rules: %d/%d", got, need)
+	}
+	at(t, nov(21, 14, 0)) // Saturday: the old weekend quota
+	if _, need := s.today(); need != 3 {
+		t.Fatalf("weekend need %d", need)
+	}
+	if st := s.consistencyStats(); !st.Reverted || st.Reps != 6 || st.Phase != "baseline" {
+		t.Fatalf("stats: %+v", st)
+	}
+}
+
+func TestTrial1Holds(t *testing.T) {
+	s := consState(t, nov(20, 18, 0))
+	resetConsRT(t)
+	for d := 6; d <= 15; d++ {
+		rep(s, d)
+	}
+	evs := consStep(t, s, nov(20, 18, 0), termWin)
+	if s.Cons.Reverted || s.phase(now()) != "trial2" || !strings.Contains(keys(evs), "trialend:trial1") {
+		t.Fatalf("held: %+v %s", s.Cons.Verdict, keys(evs))
+	}
+	if e := verdictCard(s.Cons.Verdict); e.Title != "Trial 1 held: 10 of 14 evenings" {
+		t.Fatal(e.Title)
+	}
+}
+
+// The stats: the trial window, every one of the last 28 days, reps, the
+// rolling show-up rate, the median cue → start, in the names the adapter reads.
+func TestConsistencyStats(t *testing.T) {
+	s := consState(t, nov(12, 21, 0))
+	rep(s, 6)
+	rep(s, 7)
+	rep(s, 9)
+	s.Cons.Days = []ConsDay{
+		{Date: "2026-11-09", Phase: "trial1", Rep: true, Kind: "ac", CueSet: true, CueAt: nov(9, 21, 0), StartAt: nov(9, 21, 10)},
+		{Date: "2026-11-10", Phase: "trial1", StartAt: nov(10, 19, 20)},
+		{Date: "2026-11-11", Phase: "trial1", StartAt: nov(11, 19, 40)},
+	}
+	s.Cons.Tokens = []string{"2026-11-08"}
+	b, _ := json.Marshal(s.consistencyStats())
+	var got map[string]any
+	json.Unmarshal(b, &got)
+	for _, k := range []string{"trial_from", "trial_to", "days", "reps", "show_up_14", "median_cue_to_start_min", "chain", "missed", "skip_tokens", "reverted"} {
+		if _, ok := got[k]; !ok {
+			t.Errorf("no %s in %s", k, b)
+		}
+	}
+	st := s.consistencyStats()
+	if st.TrialFrom != "2026-11-06" || st.TrialTo != "2026-11-19" || st.Reps != 3 || st.TrialDays != 7 || len(st.Days) != 28 {
+		t.Fatalf("window: %+v", st)
+	}
+	if st.ShowUp14 != 0.214 || st.MedianCueToStart == nil || *st.MedianCueToStart != 10 {
+		t.Fatalf("show-up %v median %v", st.ShowUp14, st.MedianCueToStart)
+	}
+	d9, d8 := st.Days[24], st.Days[23]
+	if d9.Date != "2026-11-09" || !d9.CueSet || d9.Cue != "21:00" || *d9.CueToStartMin != 10 || d9.Kind != "ac" || !d8.Token || d8.Rep {
+		t.Fatalf("days: %+v %+v", d9, d8)
+	}
+	if last := st.Days[27]; !last.Today || last.Cue != "19:30" || last.CueToStartMin != nil {
+		t.Fatalf("today: %+v", last)
+	}
+	b, _ = json.Marshal(st.Days[24])
+	for _, k := range []string{`"date"`, `"rep"`, `"cue_set"`, `"cue"`, `"cue_to_start_min"`, `"kind"`, `"token"`} {
+		if !strings.Contains(string(b), k) {
+			t.Errorf("day has no %s: %s", k, b)
+		}
 	}
 }

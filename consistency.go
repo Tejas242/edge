@@ -226,9 +226,130 @@ func (s *State) consToday() (got, need int) {
 }
 
 // ConsistencyStats is its part of `edge stats`.
-type ConsistencyStats struct{}
+type ConsistencyStats struct {
+	Phase      string `json:"phase"`
+	TrialFrom  string `json:"trial_from"`  // Trial 1's first day
+	TrialTo    string `json:"trial_to"`    // and its last
+	Trial2From string `json:"trial2_from"` // Trial 2's first day
+	TrialDays  int    `json:"trial_days"`  // Trial 1's days so far (today included), up to its length
+	// Days are the last 28 edge days, oldest first, today last, every day
+	// (a day the daemon never saw is a miss unless the state shows a rep).
+	Days     []ConsDayStats `json:"days"`
+	Reps     int            `json:"reps"`       // reps in Trial 1 so far
+	ShowUp14 float64        `json:"show_up_14"` // reps / 14 over the 14 days before today
+	// MedianCueToStart is over the last 28 days that started; null without any.
+	MedianCueToStart *float64      `json:"median_cue_to_start_min"`
+	Chain            int           `json:"chain"`
+	Missed           int           `json:"missed"`
+	RepDone          bool          `json:"rep_done"`
+	SkipTokens       int           `json:"skip_tokens"` // left this week
+	SuccessAt        int           `json:"success_at"`  // the pre-registered lines, in reps over the trial
+	RevertBelow      int           `json:"revert_below"`
+	Reverted         bool          `json:"reverted"`
+	Verdict          *TrialVerdict `json:"verdict,omitempty"`
+}
 
-func (s *State) consistencyStats() *ConsistencyStats { return nil }
+// ConsDayStats is one day in the stats.
+type ConsDayStats struct {
+	Date          string `json:"date"`
+	Phase         string `json:"phase"`
+	Rep           bool   `json:"rep"`
+	Kind          string `json:"kind,omitempty"`   // ac | round | giveup | focus | submit
+	CueSet        bool   `json:"cue_set"`          // he picked the time
+	Cue           string `json:"cue"`              // "19:30": the cue that held
+	CueToStartMin *int   `json:"cue_to_start_min"` // null: no start that day
+	Token         bool   `json:"token"`
+	Today         bool   `json:"today,omitempty"`
+}
+
+func (s *State) consistencyStats() *ConsistencyStats {
+	n := now()
+	c := cfg()
+	today := day(n)
+	t1, t2 := trialDay(c.Trial1), trialDay(c.Trial2)
+	kinds, _ := s.repDays()
+	cs := s.chain()
+	st := &ConsistencyStats{Phase: s.phase(n), TrialFrom: dateKey(t1), TrialTo: dateKey(t2.AddDate(0, 0, -1)), Trial2From: dateKey(t2),
+		Chain: cs.Chain, Missed: cs.Missed, RepDone: cs.RepDone, SkipTokens: s.tokensLeft(n), Reverted: s.Cons.Reverted,
+		SuccessAt: (trial1Success*trial1Days() + 13) / 14, RevertBelow: revertLine(trial1Days()), Verdict: s.Cons.Verdict}
+	if cs.RepDone {
+		kinds[dateKey(today)] = cs.Kind // the lower bar after a miss
+	}
+	for d := t1; d.Before(t2) && !d.After(today); d = d.AddDate(0, 0, 1) {
+		st.TrialDays++
+		if kinds[dateKey(d)] != "" {
+			st.Reps++
+		}
+	}
+	for i := 1; i <= 14; i++ {
+		if kinds[dateKey(today.AddDate(0, 0, -i))] != "" {
+			st.ShowUp14 += 1.0 / 14
+		}
+	}
+	st.ShowUp14 = float64(int(st.ShowUp14*1000+0.5)) / 1000
+	var starts []int
+	for i := 27; i >= 0; i-- {
+		d := today.AddDate(0, 0, -i)
+		k := dateKey(d)
+		r := s.Cons.rec(k)
+		ds := ConsDayStats{Date: k, Phase: s.phase(d.Add(12 * time.Hour)), Rep: kinds[k] != "", Kind: kinds[k],
+			Cue: cueAt(r, d).Format("15:04"), Token: s.Cons.token(k) && kinds[k] == "", Today: i == 0}
+		if r != nil {
+			ds.Phase, ds.CueSet = r.Phase, r.CueSet
+			if m, ok := s.cueToStart(r); ok {
+				ds.CueToStartMin = &m
+				starts = append(starts, m)
+			}
+		}
+		st.Days = append(st.Days, ds)
+	}
+	if len(starts) > 0 {
+		slices.Sort(starts)
+		m := float64(starts[len(starts)/2])
+		if len(starts)%2 == 0 {
+			m = float64(starts[len(starts)/2-1]+starts[len(starts)/2]) / 2
+		}
+		st.MedianCueToStart = &m
+	}
+	return st
+}
+
+// trialVerdict decides Trial 1 once its window is over: reps over its days,
+// against the line set before it began. Under the line, its rules switch
+// off (phase reads baseline again; Trial 2 doesn't start).
+func (s *State) trialVerdict(n time.Time) {
+	c := &s.Cons
+	t1, t2 := trialDay(cfg().Trial1), trialDay(cfg().Trial2)
+	if c.Verdict != nil || c.Reverted || day(n).Before(t2) {
+		return
+	}
+	kinds, _ := s.repDays()
+	v := &TrialVerdict{Days: trial1Days(), At: n}
+	for d := t1; d.Before(t2); d = d.AddDate(0, 0, 1) {
+		if kinds[dateKey(d)] != "" {
+			v.Reps++
+		}
+	}
+	v.Reverted = v.Reps < revertLine(v.Days)
+	c.Verdict, c.Reverted = v, v.Reverted
+	logEvent("trial_end", map[string]any{"trial": "trial1", "reps": v.Reps, "days": v.Days, "reverted": v.Reverted})
+}
+
+// verdictCard says Trial 1's result once, in plain words.
+func verdictCard(v *TrialVerdict) event {
+	e := event{Key: "trialend:trial1", Title: fmt.Sprintf("Trial 1 is over: %d of %d evenings", v.Reps, v.Days)}
+	if v.Reverted {
+		c := cfg()
+		e.Body = fmt.Sprintf("That's under the line of %d, so the evening cue and the chain switch off. "+
+			"edge is back to the old rules: %s on weekdays, %s on weekends.", revertLine(v.Days), plural(c.WeekdayMin, "problem"), plural(c.WeekendMin, "problem"))
+		return e
+	}
+	e.Body = "The evening rep stays, and Trial 2 starts today."
+	if v.Reps >= (trial1Success*v.Days+13)/14 {
+		e.Title = fmt.Sprintf("Trial 1 held: %d of %d evenings", v.Reps, v.Days)
+	}
+	return e
+}
 
 // consistencyStatus fills the status fields Trial 1 owns, in its phases only.
 func consistencyStatus(s *State, st *emberStatus) {
@@ -340,6 +461,7 @@ func later(t, n time.Time) time.Time {
 func consistencyEvents(s *State, w window, n time.Time) []event {
 	c := &s.Cons
 	unlock, moved := consActivity(s, w, n)
+	s.trialVerdict(n)
 	ph := s.phase(n)
 	d := day(n)
 	r := c.day(dateKey(d), ph)
@@ -363,13 +485,16 @@ func consistencyEvents(s *State, w window, n time.Time) []event {
 	if k := "cuenudge:" + r.Date; !r.Nudged && !s.Said[k].IsZero() {
 		r.Nudged = true
 	}
+	var evs []event
+	if v := c.Verdict; v != nil && n.Sub(v.At) < 48*time.Hour {
+		evs = append(evs, verdictCard(v)) // once: said is kept
+	}
 	if !s.consOn(n) || s.liveHeld() != nil {
-		return nil
+		return evs
 	}
 	if cs.RepDone || cs.Token || !r.StartAt.IsZero() {
-		return nil // tonight is settled: nothing to ask
+		return evs // tonight is settled: nothing to ask
 	}
-	var evs []event
 	waiting := !r.UnlockAt.IsZero() && r.CardAt.IsZero() && n.Sub(r.UnlockAt) < cueCardFor
 	if waiting && (consRT.unlockMoved || n.Sub(r.UnlockAt) >= time.Minute) {
 		evs = append(evs, cueCard(s, r, cs, d, n))
