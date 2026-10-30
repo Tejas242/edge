@@ -101,7 +101,7 @@ func main() {
 	)
 	switch cmd {
 	case "next", "start":
-		if snap.Current == nil {
+		if snap.Current == nil || !snap.Current.Active() {
 			cat = loadCatalog()
 		}
 	case "skip":
@@ -148,6 +148,7 @@ func main() {
 				fmt.Fprintf(out, "atcoder %d\n", r)
 			}
 		case "next", "start":
+			s.tidyRounds() // an upsolve past its due isn't startable
 			if s.Current == nil {
 				if cat == nil {
 					cat = &catalog{err: map[string]error{"cf": fmt.Errorf("not loaded")}}

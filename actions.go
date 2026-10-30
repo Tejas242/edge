@@ -68,7 +68,7 @@ func act(key string) (string, error) {
 	verb, arg, _ := strings.Cut(key, ":")
 	var cat *catalog
 	if verb == "start" || verb == "open" || verb == "next" || verb == "skip" {
-		if snap, err := load(); err == nil && (snap.Current == nil || verb == "skip") {
+		if snap, err := load(); err == nil && (snap.Current == nil || !snap.Current.Active() || verb == "skip") {
 			cat = catalogFn() // network, outside the lock
 		}
 	}
