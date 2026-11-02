@@ -77,6 +77,11 @@ type sensor struct {
 
 	submitAt time.Time // the last judge-tab title change while the task counts
 
+	idleUp  bool          // the compositor's idle watch is up: away is known
+	away    bool          // no input for idleAfter
+	onSince time.Time     // when work last started being counted (monotonic)
+	debt    time.Duration // work counted before an idle fired, to take back
+
 	wake  chan struct{}    // something the daemon should act on (cap 1)
 	clock func() time.Time // monotonic; swapped in tests
 }
@@ -92,6 +97,7 @@ var sense *sensor
 func (x *sensor) start(root string) {
 	go x.runNiri()
 	go x.runInotify(root)
+	go x.runIdle()
 }
 
 func (x *sensor) poke() {
@@ -467,13 +473,16 @@ func (x *sensor) evalLocked(t time.Time, w window) {
 		if e := x.lastEditLocked(x.task.Path); !e.IsZero() {
 			fresh = now().Sub(e) < editFresh
 		}
-		on = fresh || x.screenWorkLocked(w)
+		on = !x.away && (fresh || x.screenWorkLocked(w)) // away from the keyboard: nothing is work
 	}
 	if on {
 		x.lastWork = now()
 	}
 	if on != x.on {
 		x.on = on
+		if on {
+			x.onSince = t
+		}
 		x.poke()
 	}
 }
@@ -511,7 +520,7 @@ func (x *sensor) take(st senseTask, fallback window) (sec int, lastWork time.Tim
 	}
 	if x.task.ID != st.ID {
 		x.evalLocked(t, w) // close the old task's span
-		x.acc, x.lastWork, x.on = 0, time.Time{}, false
+		x.acc, x.lastWork, x.on, x.debt = 0, time.Time{}, false, 0
 		if x.freshAt != nil {
 			x.freshAt.Stop()
 		}
@@ -519,11 +528,49 @@ func (x *sensor) take(st senseTask, fallback window) (sec int, lastWork time.Tim
 	x.task = st
 	x.evalLocked(t, w)
 	if !st.Count {
-		x.acc = 0 // unstarted, or a live round holds the time
+		x.acc, x.debt = 0, 0 // unstarted, or a live round holds the time
+	}
+	if d := min(x.debt, x.acc); d > 0 { // the minutes before an idle weren't work
+		x.acc -= d
+		x.debt -= d
 	}
 	sec = int(x.acc / time.Second)
 	x.acc -= time.Duration(sec) * time.Second
 	return sec, x.lastWork, x.on
+}
+
+// setPresence takes the idle watch's word: up says it's running, away that
+// there's been no input for idleAfter. Going away takes back the work
+// counted over those minutes.
+func (x *sensor) setPresence(up, away bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if !up {
+		away = false // unknown: count as before
+	}
+	x.idleUp = up
+	if away == x.away {
+		return
+	}
+	t := x.clock()
+	w := x.curWinLocked()
+	x.evalLocked(t, w) // close the span up to now
+	if away && x.on {
+		x.debt = min(idleAfter, t.Sub(x.onSince))
+	}
+	x.away = away
+	x.evalLocked(t, w)
+	x.poke()
+}
+
+// presence says whether the idle watch is up and, if so, whether he's away.
+func (x *sensor) presence() (known, away bool) {
+	if x == nil {
+		return false, false
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.idleUp, x.away
 }
 
 // submitted is the last judge-tab title change seen.
