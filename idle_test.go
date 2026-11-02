@@ -58,13 +58,13 @@ func newFakeCompositor(t *testing.T, notifierVer uint32) (*fakeCompositor, func(
 func (f *fakeCompositor) event(obj uint32, op uint16) { f.conn.Write(wlMsg(obj, op)) }
 
 // The watch binds the seat and the notifier, asks for input idle (v2) after
-// idleAfter, and follows idled and resumed.
+// away_min, and follows idled and resumed.
 func TestIdleWatch(t *testing.T) {
 	f, dial := newFakeCompositor(t, 2)
 	x := newSensor()
 	done := make(chan error, 1)
 	go func() { done <- x.idleStream(dial) }()
-	want := [][3]uint32{{1, 1, 2}, {1, 0, 3}, {2, 0, 7}, {2, 0, 9}, {5, 2, 6}} // bind seat, bind notifier, get_input_idle_notification
+	want := [][3]uint32{{1, 1, 2}, {1, 0, 3}, {2, 0, 7}, {2, 0, 9}, {5, 2, 6}} // get_registry, sync, bind seat, bind notifier, get_input_idle_notification
 	for _, w := range want {
 		select {
 		case got := <-f.reqs:
@@ -116,11 +116,11 @@ func TestAwayIsNotWork(t *testing.T) {
 	x.take(st, window{})
 	x.setPresence(true, false)
 	mono = mono.Add(20 * time.Minute)
-	x.setPresence(true, true) // idled: no input for the last 5 of those 20
+	x.setPresence(true, true) // idled: no input for the last 10 of those 20
 	mono = mono.Add(30 * time.Minute)
 	sec, _, on := x.take(st, window{})
-	if on || sec != 15*60 {
-		t.Fatalf("away: worked %ds on=%v, want 900s off", sec, on)
+	if on || sec != 10*60 {
+		t.Fatalf("away: worked %ds on=%v, want 600s off", sec, on)
 	}
 	x.setPresence(true, false)
 	mono = mono.Add(2 * time.Minute)

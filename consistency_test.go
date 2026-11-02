@@ -371,12 +371,18 @@ func TestCueActions(t *testing.T) {
 	if _, err := act("cue:25:00"); err == nil {
 		t.Fatal("bad time accepted")
 	}
+	if _, err := act("cue:23:30"); err == nil { // the gate closes at the cue: not that late
+		t.Fatal("a cue past 23:00 accepted")
+	}
 	at(t, nov(10, 0, 30))
-	if _, err := act("cue:01:15"); err != nil {
+	if _, err := act("cue:01:15"); err == nil {
+		t.Fatal("past 23:00, a cue more than 30 minutes off accepted")
+	}
+	if _, err := act("cue:00:55"); err != nil {
 		t.Fatal(err)
 	}
 	s, _ = load()
-	if r := s.Cons.rec("2026-11-09"); !r.CueAt.Equal(nov(10, 1, 15)) {
+	if r := s.Cons.rec("2026-11-09"); !r.CueAt.Equal(nov(10, 0, 55)) {
 		t.Fatalf("small hours belong to the evening: %v", r.CueAt)
 	}
 
@@ -664,5 +670,64 @@ func TestAwayTitlesArentAnUnlock(t *testing.T) {
 	consistencyEvents(s, window{ID: 1, App: "Alacritty", Title: "x"}, n)
 	if r := s.Cons.rec(dateKey(day(n))); !r.UnlockAt.Equal(n) {
 		t.Fatalf("unlock %v, want %v", r.UnlockAt, n)
+	}
+}
+
+// In the trials the gate closes at tonight's cue, not at 19:00: the card's
+// "When?" is when Claude locks. Only he can move it later.
+func TestGateClosesAtTheCue(t *testing.T) {
+	s := consState(t, nov(9, 19, 10)) // Monday, default cue 19:30
+	resetConsRT(t)
+	if err := s.save(); err != nil {
+		t.Fatal(err)
+	}
+	if s.closed() || s.stats().Today.GateWhy != "before_cue" {
+		t.Fatalf("19:10: closed=%v why=%q", s.closed(), s.stats().Today.GateWhy)
+	}
+	at(t, nov(9, 19, 30))
+	if !s.closed() {
+		t.Fatal("19:30: the gate should close at the cue")
+	}
+	at(t, nov(9, 19, 10))
+	if _, err := act("cue:21:00"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = load()
+	at(t, nov(9, 20, 59))
+	if s.closed() {
+		t.Fatal("20:59: open until the 21:00 he picked")
+	}
+	at(t, nov(9, 21, 0))
+	if !s.closed() {
+		t.Fatal("21:00: closed")
+	}
+	sat := consState(t, nov(7, 11, 0)) // Saturday: study time from 10:00, cue 12:30
+	if sat.closed() {
+		t.Fatal("Saturday 11:00: open until 12:30")
+	}
+	at(t, nov(7, 12, 30))
+	if !sat.closed() {
+		t.Fatal("Saturday 12:30: closed")
+	}
+}
+
+func TestClaudeCantMoveTheCue(t *testing.T) {
+	s := consState(t, nov(9, 19, 0))
+	resetConsRT(t)
+	if err := s.save(); err != nil {
+		t.Fatal(err)
+	}
+	old, oldCat := claudeAncestor, catalogFn
+	claudeAncestor = func() bool { return true }
+	catalogFn = func() *catalog { return &catalog{err: map[string]error{"cf": os.ErrNotExist}} } // offline
+	t.Cleanup(func() { claudeAncestor, catalogFn = old, oldCat })
+	for _, k := range []string{"cue:21:00", "skiptonight"} {
+		if _, err := act(k); err == nil {
+			t.Fatalf("%s from Claude was accepted", k)
+		}
+		at(t, now().Add(5*time.Second)) // not a double click
+	}
+	if _, err := act("cue:now"); err != nil { // sooner is fine
+		t.Fatal(err)
 	}
 }

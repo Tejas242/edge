@@ -172,11 +172,22 @@ type verdict struct {
 // it. Outside study time the gate is open: no work is on offer, so there is
 // nothing to hold out for.
 func (s *State) closed() bool {
-	if !s.rules().Gate || s.GateFrom.IsZero() || now().Before(s.GateFrom) || !studyTime(now()) {
+	if !s.rules().Gate || s.GateFrom.IsZero() || now().Before(s.GateFrom) || !studyTime(now()) || s.beforeCue(now()) {
 		return false
 	}
 	got, need := s.today()
 	return got < need && !s.passOn(now()) && s.failOpen() == "" && s.roundToday() == nil
+}
+
+// beforeCue: in the trials the gate closes at tonight's cue (the time he
+// picked, else the default), not at the start of study time: the card asks
+// "When?", and the answer is when Claude locks.
+func (s *State) beforeCue(n time.Time) bool {
+	if !s.consOn(n) {
+		return false
+	}
+	d := day(n)
+	return n.Before(cueAt(s.Cons.rec(dateKey(d)), d))
 }
 
 // failOpen says why the gate must open even though the work isn't done:

@@ -78,7 +78,7 @@ type sensor struct {
 	submitAt time.Time // the last judge-tab title change while the task counts
 
 	idleUp  bool          // the compositor's idle watch is up: away is known
-	away    bool          // no input for idleAfter
+	away    bool          // no input for awayAfter
 	onSince time.Time     // when work last started being counted (monotonic)
 	debt    time.Duration // work counted before an idle fired, to take back
 
@@ -540,7 +540,7 @@ func (x *sensor) take(st senseTask, fallback window) (sec int, lastWork time.Tim
 }
 
 // setPresence takes the idle watch's word: up says it's running, away that
-// there's been no input for idleAfter. Going away takes back the work
+// there's been no input for awayAfter. Going away takes back the work
 // counted over those minutes.
 func (x *sensor) setPresence(up, away bool) {
 	x.mu.Lock()
@@ -556,7 +556,7 @@ func (x *sensor) setPresence(up, away bool) {
 	w := x.curWinLocked()
 	x.evalLocked(t, w) // close the span up to now
 	if away && x.on {
-		x.debt = min(idleAfter, t.Sub(x.onSince))
+		x.debt = min(awayAfter(), t.Sub(x.onSince))
 	}
 	x.away = away
 	x.evalLocked(t, w)

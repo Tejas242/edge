@@ -128,7 +128,7 @@ type StatsToday struct {
 	StudyFrom string `json:"study_from"` // "19:00"
 	DayEnds   string `json:"day_ends"`   // "04:00"
 	Gate      string `json:"gate"`       // closed | open | off
-	GateWhy   string `json:"gate_why"`   // done | pass | outside_study_time | not_enforcing | disabled | edge_trouble | ""
+	GateWhy   string `json:"gate_why"`   // done | pass | outside_study_time | before_cue | not_enforcing | disabled | edge_trouble | round_today | ""
 	PassUsed  bool   `json:"pass_used_this_week"`
 }
 
@@ -307,6 +307,8 @@ func (s *State) stats() Stats {
 			st.Today.GateWhy = "edge_trouble"
 		case s.roundToday() != nil:
 			st.Today.GateWhy = "round_today"
+		case studyTime(n) && s.beforeCue(n):
+			st.Today.GateWhy = "before_cue"
 		default:
 			st.Today.GateWhy = "outside_study_time"
 		}

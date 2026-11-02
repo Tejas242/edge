@@ -41,6 +41,7 @@ type Config struct {
 	Distraction *regexp.Regexp // [notify] drift_sites
 	DriftAfter  time.Duration  // [notify] drift_min
 	OfferEvery  time.Duration  // [notify] offer_every_min
+	AwayAfter   time.Duration  // [notify] away_min: no input this long is away
 
 	Terminal, Editor, Browser string // [launch]
 
@@ -82,7 +83,7 @@ func defaultConfig() *Config {
 		FirstResolve: 5, SecondResolve: 14, RetryResolve: 3,
 		Distraction: sitesRe([]string{"youtube", "reddit", "twitter", "x.com", "instagram", "netflix",
 			"twitch", "hotstar", "prime video", "facebook", "9gag"}),
-		DriftAfter: 2 * time.Minute, OfferEvery: 30 * time.Minute,
+		DriftAfter: 2 * time.Minute, OfferEvery: 30 * time.Minute, AwayAfter: 10 * time.Minute,
 		Terminal: "alacritty", Editor: "nvim", Browser: "xdg-open",
 		Rounds: true, RoundJudges: []string{"cf", "ac", "lc"}, PerWeek: 2, RoundLock: true, UpsolveN: 2, UpsolveDays: 7,
 		Trial1: trial1From, Trial2: trial2From, CueWeekday: 19*time.Hour + 30*time.Minute, CueWeekend: 12*time.Hour + 30*time.Minute,
@@ -184,6 +185,7 @@ retry_days  = 3   # after failing one
 drift_sites     = ["youtube", "reddit", "twitter", "x.com", "instagram", "netflix", "twitch", "hotstar", "prime video", "facebook", "9gag"]
 drift_min       = 2   # minutes on those, mid-task, before a nudge
 offer_every_min = 30  # how often an unstarted problem is offered again
+away_min        = 10  # no keyboard or mouse this long = away: the work clock stops, and those minutes don't count
 
 [launch]
 terminal = "alacritty"  # must take --title, --working-directory and -e
@@ -417,6 +419,8 @@ func parseConfig(path string) (*Config, []string) {
 			num(1, 60, func(x int) { c.DriftAfter = time.Duration(x) * time.Minute })
 		case "notify.offer_every_min":
 			num(5, 600, func(x int) { c.OfferEvery = time.Duration(x) * time.Minute })
+		case "notify.away_min":
+			num(2, 60, func(x int) { c.AwayAfter = time.Duration(x) * time.Minute })
 		case "launch.terminal":
 			c.Terminal = str
 		case "launch.editor":

@@ -41,7 +41,7 @@ offset. Dates (`"2026-10-15"`) are **edge days**, which end at `day_ends`
     "study_time": true,                       // problems are offered (and the gate can close) now
     "study_from": "19:00", "day_ends": "04:00",
     "gate": "closed",                         // closed | open | off
-    "gate_why": "",                           // when open: done | pass | outside_study_time | not_enforcing | edge_trouble | round_today; "disabled" when off
+    "gate_why": "",                           // when open: done | pass | outside_study_time | before_cue (a trial night before its cue) | not_enforcing | edge_trouble | round_today; "disabled" when off
     "pass_used_this_week": false
   },
 

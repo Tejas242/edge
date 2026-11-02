@@ -288,6 +288,15 @@ func passAllowed() error {
 	if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
 		return fmt.Errorf("`edge pass` only works typed in a terminal")
 	}
+	if claudeAncestor() {
+		return fmt.Errorf("`edge pass` can't be run from Claude; type it in your own terminal")
+	}
+	return nil
+}
+
+// claudeAncestor: this process was started, at any depth, by Claude Code.
+// Swapped in tests.
+var claudeAncestor = func() bool {
 	for pid := os.Getppid(); pid > 1; {
 		b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 		if err != nil {
@@ -300,7 +309,7 @@ func passAllowed() error {
 			break
 		}
 		if comm := st[open+1 : close]; comm == "claude" {
-			return fmt.Errorf("`edge pass` can't be run from Claude; type it in your own terminal")
+			return true
 		}
 		f := strings.Fields(st[close+1:])
 		if len(f) < 2 {
@@ -308,7 +317,7 @@ func passAllowed() error {
 		}
 		pid, _ = strconv.Atoi(f[1])
 	}
-	return nil
+	return false
 }
 
 func isTerminal(f *os.File) bool {
@@ -390,6 +399,9 @@ func gateLine(s *State) string {
 		return "gate: open, pass used today" + seen + "\n"
 	case s.failOpen() != "":
 		return "gate: open because edge can't offer work: " + s.failOpen() + seen + "\n"
+	case studyTime(now()) && s.beforeCue(now()):
+		d := day(now())
+		return "gate: open until tonight's rep at " + cueAt(s.Cons.rec(dateKey(d)), d).Format("15:04") + seen + "\n"
 	case s.roundToday() != nil:
 		return "gate: open until today's round, " + s.roundToday().Short() + " at " + s.roundToday().Start.Format("15:04") + seen + "\n"
 	default:

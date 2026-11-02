@@ -413,12 +413,23 @@ func consistencyAction(s *State, verb, arg string) (handled bool, msg string, er
 	if cs.RepDone {
 		return true, "", errors.New("tonight's rep is already done")
 	}
+	if (verb == "skiptonight" || arg != "now") && claudeAncestor() {
+		// both move the lock later: his call, from Ember's card, never Claude's
+		return true, "", errors.New("only you can move tonight's rep; pick on Ember's card")
+	}
 	if verb == "cue" {
 		at := n
 		if arg != "now" {
 			t, ok := hhmm(d, arg)
 			if !ok {
 				return true, "", fmt.Errorf("unknown action %q", "cue:"+arg)
+			}
+			limit := latestCue(d)
+			if soon := n.Add(30 * time.Minute); soon.After(limit) {
+				limit = soon
+			}
+			if t.After(limit) {
+				return true, "", fmt.Errorf("pick a time by %s", limit.Format("15:04"))
 			}
 			at = later(t, n)
 		}
@@ -458,6 +469,11 @@ func skipOpen(r *ConsDay, d, n time.Time) bool {
 	}
 	return !r.CueSet && r.UnlockAt.After(defaultCue(d)) && n.Sub(cueAt(r, d)) < cueNudgeAfter
 }
+
+// latestCue is the latest rep time he can pick on edge day d (later than
+// that, only up to 30 minutes ahead): the gate closes at the cue, so a cue
+// at 03:00 would mean no gate at all.
+func latestCue(d time.Time) time.Time { return d.Add(23 * time.Hour) }
 
 // later is t, or n when t has passed.
 func later(t, n time.Time) time.Time {
@@ -531,7 +547,7 @@ var consRT struct {
 
 // consActivity reads activity from what the sensor already sees, with no
 // polling of its own. With the compositor's idle watch up, activity is
-// input in the last idleAfter. Without it: the focused window or its title
+// input in the last away_min. Without it: the focused window or its title
 // changed, work was counted, or the wall clock jumped between steps (a
 // resume: the daemon can't step while the laptop sleeps). active says
 // there was activity this step; unlock is the first activity after idleGap
@@ -598,12 +614,12 @@ func cueCard(s *State, r *ConsDay, cs chainState, d, n time.Time) event {
 	chips := []action{{"cue:now", "Now"}}
 	var times []time.Time
 	for _, t := range []time.Time{defaultCue(d), defaultCue(d).Add(90 * time.Minute)} {
-		if t.After(n.Add(5 * time.Minute)) {
+		if t.After(n.Add(5*time.Minute)) && !t.After(latestCue(d)) {
 			times = append(times, t)
 		}
 	}
-	if len(times) == 0 { // past the default: Now leads, and one later choice
-		times = append(times, n.Add(90*time.Minute).Truncate(15*time.Minute).Add(15*time.Minute))
+	if late := n.Add(90 * time.Minute).Truncate(15 * time.Minute).Add(15 * time.Minute); len(times) == 0 && !late.After(latestCue(d)) {
+		times = append(times, late) // past the default: Now leads, and one later choice
 	}
 	for _, t := range times {
 		chips = append(chips, action{"cue:" + t.Format("15:04"), t.Format("15:04")})

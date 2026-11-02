@@ -22,6 +22,7 @@ func TestMain(m *testing.M) {
 		os.Setenv(k, v)
 	}
 	os.MkdirAll(d+"/CP", 0o755)
+	claudeAncestor = func() bool { return false } // the tests may run under Claude; they act as him
 	code := m.Run()
 	os.RemoveAll(d)
 	os.Exit(code)

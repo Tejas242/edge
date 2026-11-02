@@ -14,15 +14,16 @@ import (
 )
 
 // Presence comes from the compositor: ext-idle-notify-v1 says when there's
-// been no keyboard or pointer input for idleAfter, and when input is back.
+// been no keyboard or pointer input for away_min, and when input is back.
 // Without it, a terminal in the workspace or a judge tab left focused counts
 // as work while he's away, and a locked screen whose window titles change
 // looks like someone at the laptop. Version 2's input idle ignores idle
 // inhibitors, so a playing video doesn't count as him.
 
-// idleAfter: this long without input is away. Reading and thinking scroll or
-// type within it; the work it covered is taken back when it fires.
-const idleAfter = 5 * time.Minute
+// awayAfter is [notify] away_min (10 minutes): this long without input is
+// away. The work it covered is taken back when it fires, so a longer wait
+// only costs how soon edge notices, while quiet thinking up to it counts.
+func awayAfter() time.Duration { return cfg().AwayAfter }
 
 var errNoIdle = errors.New("the compositor has no ext_idle_notifier_v1")
 
@@ -67,6 +68,24 @@ func (x *sensor) idleStream(dial func() (io.ReadWriteCloser, error)) error {
 		return err
 	}
 	defer c.Close()
+	after := awayAfter()
+	quit := make(chan struct{})
+	defer close(quit)
+	go func() { // a changed away_min reconnects with it
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-t.C:
+				if awayAfter() != after {
+					c.Close()
+					return
+				}
+			}
+		}
+	}()
 	r := bufio.NewReader(c)
 	const (
 		display  = 1
@@ -112,7 +131,7 @@ func (x *sensor) idleStream(dial func() (io.ReadWriteCloser, error)) error {
 	}
 	req := wlBind(registry, seatName, "wl_seat", 1, seat)
 	req = append(req, wlBind(registry, idleName, "ext_idle_notifier_v1", idleVer, notifier)...)
-	req = append(req, wlMsg(notifier, op, note, uint32(idleAfter.Milliseconds()), seat)...)
+	req = append(req, wlMsg(notifier, op, note, uint32(after.Milliseconds()), seat)...)
 	if _, err := c.Write(req); err != nil {
 		return err
 	}
