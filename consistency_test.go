@@ -609,3 +609,60 @@ func TestSubmitCountsOnlyAfterRealWork(t *testing.T) {
 		t.Fatalf("a quick AC still counts: %q", k[date])
 	}
 }
+
+// Already at the laptop when office hours end (a Saturday from 09:30, or a
+// weekday home early): the "When?" card comes at the end of office, not
+// never. Away on a locked screen, titles that change don't count as him.
+func TestCueWhenAlreadyAtTheLaptop(t *testing.T) {
+	for _, c := range []struct {
+		name           string
+		from, to, want time.Time
+	}{
+		{"Saturday from 09:30", nov(7, 9, 30), nov(7, 14, 0), nov(7, 10, 0)},
+		{"Monday home at 16:30", nov(9, 16, 30), nov(9, 21, 0), nov(9, 17, 0)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := consState(t, c.from)
+			resetConsRT(t)
+			s.Cons.SeenAt = c.from.Add(-10 * time.Hour) // asleep overnight
+			got := time.Time{}
+			for i, n := 0, c.from; n.Before(c.to); i, n = i+1, n.Add(time.Minute) {
+				at(t, n)
+				w := window{ID: uint64(i%3 + 1), App: "zen", Title: "tab"} // he moves between windows
+				for _, e := range consistencyEvents(s, w, n) {
+					if strings.HasPrefix(e.Key, "cue:") && got.IsZero() {
+						got = n
+						s.Said[e.Key] = n
+					}
+				}
+			}
+			if !got.Equal(c.want) {
+				t.Fatalf("the When? card came at %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestAwayTitlesArentAnUnlock(t *testing.T) {
+	s := consState(t, nov(9, 16, 0))
+	resetConsRT(t)
+	sense = newSensor()
+	t.Cleanup(func() { sense = nil })
+	sense.setPresence(true, true) // locked and away since before office ended
+	for i, n := 0, nov(9, 16, 0); n.Before(nov(9, 19, 0)); i, n = i+1, n.Add(time.Minute) {
+		at(t, n)
+		w := window{ID: 1, App: "Alacritty", Title: "✳ claude " + strings.Repeat("·", i%3)} // a spinner in the title
+		for _, e := range consistencyEvents(s, w, n) {
+			if strings.HasPrefix(e.Key, "cue:") {
+				t.Fatalf("a When? card at %v while away", n)
+			}
+		}
+	}
+	sense.setPresence(true, false) // back
+	n := nov(9, 19, 0)
+	at(t, n)
+	consistencyEvents(s, window{ID: 1, App: "Alacritty", Title: "x"}, n)
+	if r := s.Cons.rec(dateKey(day(n))); !r.UnlockAt.Equal(n) {
+		t.Fatalf("unlock %v, want %v", r.UnlockAt, n)
+	}
+}

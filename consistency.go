@@ -471,7 +471,7 @@ func later(t, n time.Time) time.Time {
 // phases, says Trial 1's cards.
 func consistencyEvents(s *State, w window, n time.Time) []event {
 	c := &s.Cons
-	unlock, moved := consActivity(s, w, n)
+	unlock, moved, active := consActivity(s, w, n)
 	s.trialVerdict(n)
 	ph := s.phase(n)
 	d := day(n)
@@ -482,7 +482,9 @@ func consistencyEvents(s *State, w window, n time.Time) []event {
 		logEvent("chain_break", map[string]any{"was": c.Chain, "phase": ph})
 	}
 	c.Chain = cs.Chain
-	if unlock && afterOffice(n) && r.UnlockAt.IsZero() {
+	// the first sight of him after office is the "unlock": back from a
+	// break, or already at the laptop when office hours end
+	if (unlock || active) && afterOffice(n) && r.UnlockAt.IsZero() {
 		r.UnlockAt = n
 		consRT.unlockMoved = moved
 	}
@@ -528,12 +530,14 @@ var consRT struct {
 }
 
 // consActivity reads activity from what the sensor already sees, with no
-// polling of its own: the focused window or its title changed, work was
-// counted, or the wall clock jumped between steps (a resume: the daemon
-// can't step while the laptop sleeps). unlock is the first activity after
-// idleGap without any; moved says it came from the screen, not a resume
-// alone (whose lock screen may still be up).
-func consActivity(s *State, w window, n time.Time) (unlock, moved bool) {
+// polling of its own. With the compositor's idle watch up, activity is
+// input in the last idleAfter. Without it: the focused window or its title
+// changed, work was counted, or the wall clock jumped between steps (a
+// resume: the daemon can't step while the laptop sleeps). active says
+// there was activity this step; unlock is the first activity after idleGap
+// without any; moved says it came from the screen, not a resume alone
+// (whose lock screen may still be up).
+func consActivity(s *State, w window, n time.Time) (unlock, moved, active bool) {
 	c := &s.Cons
 	last := consRT.activeAt
 	if last.IsZero() {
@@ -547,15 +551,19 @@ func consActivity(s *State, w window, n time.Time) (unlock, moved bool) {
 	moved = !consRT.at.IsZero() && w != consRT.win
 	working := s.Current != nil && !s.Current.WorkAt.IsZero() && n.Sub(s.Current.WorkAt) < time.Minute
 	consRT.at, consRT.win = n, w
-	if !resumed && !moved && !working {
-		return false, false
+	active = resumed || moved || working
+	if known, away := sense.presence(); known {
+		active = !away // input says it, not window titles that change on their own
+	}
+	if !active {
+		return false, false, false
 	}
 	unlock = last.IsZero() || n.Sub(last) >= idleGap
 	consRT.activeAt = n
 	if n.Sub(c.SeenAt) >= seenEvery {
 		c.SeenAt = n
 	}
-	return unlock, moved || working
+	return unlock, moved || working, true
 }
 
 // afterOffice: the evening cue may ask now. Weekdays after office_until,
