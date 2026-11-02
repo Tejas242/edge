@@ -358,3 +358,24 @@ func TestEventLogRotates(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// Nov 1: he said "got AC" on ABC482 E before AtCoder's feed showed it, and
+// edge ran the explain-back for 1975B, solved 20 minutes earlier.
+func TestDoneBeforeTheJudgeShowsIt(t *testing.T) {
+	s := fresh(t)
+	at(t, nov(1, 17, 31))
+	s.History = append(s.History,
+		Task{ID: "cf:1975B", Kind: "reentry", Title: "378QAQ", Outcome: "solo", Explain: -1, Started: nov(1, 17, 10), Finished: nov(1, 17, 13)},
+		Task{ID: "cf:2272D", Kind: "upsolve", Title: "Conflicts", Outcome: "skipped", Explain: -1, Finished: nov(1, 17, 24)})
+	s.Current = &Task{ID: "ac:abc482_e", Kind: "upsolve", Title: "Diameter Endpoint Colors", Explain: -1, Assigned: nov(1, 17, 24), Started: nov(1, 17, 25)}
+	err := done(s, false, nil)
+	if err == nil || !strings.Contains(err.Error(), "AtCoder") {
+		t.Fatalf("err %v: want AtCoder's lag, not 1975B's explain-back", err)
+	}
+	// the usual case: the daemon took the AC and the next problem waits unstarted
+	s.History = s.History[:1]
+	s.Current = &Task{ID: "cf:1418C", Kind: "new", Title: "Tower", Explain: -1, Assigned: nov(1, 17, 14)}
+	if err := done(s, false, nil); err != nil {
+		t.Fatalf("the explain-back still waiting: %v", err)
+	}
+}

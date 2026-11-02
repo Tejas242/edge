@@ -5,7 +5,7 @@ allowed-tools: Bash(edge done), Bash(edge explain *)
 ---
 Run `edge done`. It records the AC if the daemon hasn't already, then prints the problem, topic and the user's accepted code.
 
-- If it says no accepted submission was found, tell them and stop.
+- If it says the AC isn't in yet (no accepted submission, or AtCoder's feed lags), tell them edge records it by itself and opens the explain-back then, and stop.
 - Otherwise run the explain-back. Keep it brisk: about 2 minutes.
 
 1. Ask the first question, then wait for their answer: **Why is it correct?** Point at the core idea in *their* code. Examples: "why can't a greedy choice here lose?", "what exactly does dp[i] mean?"

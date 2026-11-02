@@ -312,14 +312,20 @@ func done(s *State, ok bool, verifyErr error) error {
 		return explainInfo(s)
 	}
 	if !ok {
-		if p := s.lastSolved(); p != nil {
+		// the daemon took the AC and handed out the next problem, still
+		// unstarted: the explain-back waiting is what he means. Anything
+		// else (he's on this one) is about this problem, which isn't in yet.
+		if p := s.lastSolved(); p != nil && !t.Active() && p == &s.History[len(s.History)-1] {
 			fmt.Fprintf(out, "(%s isn't accepted yet; this is the explain-back for %s)\n", t.Title, p.Title)
 			return explainInfo(s)
 		}
 		if verifyErr != nil {
 			return verifyErr
 		}
-		return fmt.Errorf("no accepted submission for %s yet; submit it first", t.Title)
+		if t.Source() == "ac" {
+			return fmt.Errorf("AtCoder doesn't show %s's AC yet (its feed lags a few minutes); edge records it by itself once it does, then the explain-back opens", t.Title)
+		}
+		return fmt.Errorf("no accepted submission for %s yet; edge records it by itself once the judge shows it", t.Title)
 	}
 	accept(s, t, now())
 	fmt.Fprintf(out, "ACCEPTED (%s) in %s\n", t.Outcome, since(t.Started))
