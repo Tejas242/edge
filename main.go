@@ -51,6 +51,12 @@ func main() {
 		}
 		fmt.Println(msg)
 		return
+	case "receipt": // Ember: what happened to a card (receipt.go); quiet on success
+		if err := receipt(args); err != nil {
+			fmt.Fprintln(os.Stderr, sentence(err.Error()))
+			os.Exit(1)
+		}
+		return
 	case "install":
 		check(install())
 		return
@@ -241,7 +247,7 @@ func sentence(s string) string {
 	return s
 }
 
-const usageText = "usage: edge daemon|hook|action <key>|install|status|stats [--compact]|config [init]|next|start|stuck [--take N]|done|giveup|skip [--seen]|explain [0-2]|rounds|round [lesson <text>]|report|pass|sync"
+const usageText = "usage: edge daemon|hook|action <key>|receipt seen|expired <cardkey> [ms|why]|install|status|stats [--compact]|config [init]|next|start|stuck [--take N]|done|giveup|skip [--seen]|explain [0-2]|rounds|round [lesson <text>]|report|pass|sync"
 
 func usage() {
 	fmt.Fprintln(os.Stderr, usageText)
@@ -250,7 +256,7 @@ func usage() {
 
 // checkArgs rejects arguments a command doesn't take, so a typo or a flag
 // like --dry-run never runs the real command as if it weren't there.
-// hook, daemon and action are called by machines and check their own.
+// hook, daemon, action and receipt are called by machines and check their own.
 func checkArgs(cmd string, args []string) {
 	if !argsOK(cmd, args) {
 		usage()
@@ -259,7 +265,7 @@ func checkArgs(cmd string, args []string) {
 
 func argsOK(cmd string, args []string) bool {
 	switch cmd {
-	case "hook", "daemon", "action", "round":
+	case "hook", "daemon", "action", "round", "receipt":
 		return true
 	case "stats":
 		return len(args) == 0 || len(args) == 1 && args[0] == "--compact"

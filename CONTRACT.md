@@ -78,3 +78,25 @@ Added by fix/core (fields only): `emberCard.ttl_s`; `Task.work_days` (work by ed
 - Cards: the mistake card has the fail card's id (`fail`) and replaces it, with 5 chips (and the hint buttons when
   due); the drill card is `drill`, chips Start · In 30 min.
 - Config: `[patterns]` <id> = weight (default 1), `[readiness] interview_rating`.
+
+## Receipts (Ember ≥ 1.3)
+
+edge logs `cue_shown` / `shown` when it *pushes* a card. Ember reports what happened to the card on screen with its own
+command, which only appends one event to `~/.local/share/edge/events.jsonl`:
+
+```
+edge receipt seen <cardkey> [visible_ms]
+edge receipt expired <cardkey> [unseen|fullscreen|away|osd|replaced]
+```
+
+- `<cardkey>` is the card `id` edge pushed, exactly as sent (e.g. `offer:cf:1418C:2026-11-01:1`).
+- Events: `{"at":…,"ev":"card_seen","key":…,"ms":4200}` (`ms` only if given) and
+  `{"at":…,"ev":"card_expired","key":…,"why":"fullscreen"}` (`why` only if given).
+- Why a separate command and not an `action` key: card keys contain colons, so `expired:<key>:<why>` can't be split
+  safely, and `act` would also log an `action` event, apply its double-click guard and push a status back to Ember.
+  A receipt does none of that: no state read or lock, no push to Ember, no network, no trial logic.
+- An unknown or stale card key is logged all the same (exit 0, no output). Bad input (missing key, key with spaces,
+  non-numeric or negative ms, a `why` not in the list, a kind other than seen/expired) prints one plain sentence to
+  stderr, exits 1 and writes nothing.
+- Stats are unchanged: per-day card counts would mean reading the whole event log on every stats build, so they are
+  left to whoever analyses `events.jsonl`.

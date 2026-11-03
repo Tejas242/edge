@@ -766,7 +766,7 @@ func TestArgsChecked(t *testing.T) {
 		{"stats", []string{"--compact"}, true}, {"stats", []string{"-c"}, false},
 		{"skip", []string{"--seen"}, true}, {"stuck", []string{"--take", "2"}, true}, {"stuck", []string{"2"}, false},
 		{"explain", []string{"1"}, true}, {"explain", []string{"1", "2"}, false},
-		{"round", []string{"lesson", "a", "b"}, true}, {"action", []string{"explain"}, true},
+		{"round", []string{"lesson", "a", "b"}, true}, {"action", []string{"explain"}, true}, {"receipt", []string{"seen", "k"}, true},
 	} {
 		if got := argsOK(c.cmd, c.args); got != c.ok {
 			t.Errorf("argsOK(%s %v) = %v, want %v", c.cmd, c.args, got, c.ok)
